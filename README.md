@@ -268,7 +268,7 @@ Open http://localhost:8000/chat
 
 NyRAG supports running LLMs locally using any OpenAI-compatible server. Here are some popular options:
 
-### Ollama (Recommended for Local Use)
+### Ollama
 
 1. **Install Ollama**: [https://ollama.ai](https://ollama.ai)
 
