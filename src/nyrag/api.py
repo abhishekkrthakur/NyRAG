@@ -315,6 +315,63 @@ def _get_llm_client() -> AsyncOpenAI:
     return AsyncOpenAI(base_url=base_url, api_key=api_key, default_headers=default_headers or None)
 
 
+async def _create_chat_completion_with_fallback(
+    client: AsyncOpenAI,
+    model: str,
+    messages: List[Dict[str, str]],
+    stream: bool = False,
+    enable_json_mode: bool = False,
+    enable_reasoning: bool = False,
+) -> Any:
+    """
+    Create a chat completion with graceful fallback for unsupported features.
+
+    Tries advanced features first (json_object, reasoning), then falls back to basic mode
+    if the server doesn't support them (e.g., local models like Ollama, LM Studio).
+
+    Args:
+        client: AsyncOpenAI client
+        model: Model name
+        messages: List of message dictionaries
+        stream: Whether to stream responses
+        enable_json_mode: Whether to request JSON output format
+        enable_reasoning: Whether to enable reasoning mode
+
+    Returns:
+        Chat completion response or stream
+    """
+    request_kwargs = {
+        "model": model,
+        "messages": messages,
+        "stream": stream,
+    }
+
+    # Add optional features
+    if enable_json_mode:
+        request_kwargs["response_format"] = {"type": "json_object"}
+    if enable_reasoning:
+        request_kwargs["extra_body"] = {"reasoning": {"enabled": True}}
+
+    # Try with all features first
+    if enable_json_mode or enable_reasoning:
+        try:
+            return await client.chat.completions.create(**request_kwargs)
+        except Exception as e:
+            # Check if error is related to unsupported features
+            error_str = str(e).lower()
+            if any(keyword in error_str for keyword in ["response_format", "extra_body", "reasoning", "json_object"]):
+                # Fallback: remove unsupported parameters
+                request_kwargs.pop("response_format", None)
+                request_kwargs.pop("extra_body", None)
+                return await client.chat.completions.create(**request_kwargs)
+            else:
+                # Different error, re-raise
+                raise
+
+    # No special features requested, just make the call
+    return await client.chat.completions.create(**request_kwargs)
+
+
 def _extract_message_text(content: Any) -> str:
     """Handle OpenAI response content that may be str or list of text blocks."""
     if content is None:
@@ -385,31 +442,17 @@ async def _generate_search_queries_stream(
     full_content = ""
     try:
         client = _get_llm_client()
-
-        # Try with response_format and reasoning support (OpenRouter, OpenAI)
-        # Fall back to basic streaming if not supported (local models)
-        request_kwargs = {
-            "model": model_id,
-            "messages": [
+        stream = await _create_chat_completion_with_fallback(
+            client=client,
+            model=model_id,
+            messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "stream": True,
-        }
-
-        # Try with structured output first
-        try:
-            request_kwargs["response_format"] = {"type": "json_object"}
-            request_kwargs["extra_body"] = {"reasoning": {"enabled": True}}
-            stream = await client.chat.completions.create(**request_kwargs)
-        except Exception as e:
-            # Fallback: remove unsupported parameters for local models
-            if "response_format" in str(e) or "extra_body" in str(e) or "reasoning" in str(e):
-                request_kwargs.pop("response_format", None)
-                request_kwargs.pop("extra_body", None)
-                stream = await client.chat.completions.create(**request_kwargs)
-            else:
-                raise
+            stream=True,
+            enable_json_mode=True,
+            enable_reasoning=True,
+        )
 
         async for chunk in stream:
             choice = chunk.choices[0]
@@ -571,23 +614,13 @@ async def _call_openrouter(context: List[Dict[str, str]], user_message: str, mod
 
     try:
         client = _get_llm_client()
-
-        # Try with reasoning support, fall back without it
-        try:
-            resp = await client.chat.completions.create(
-                model=model_id,
-                messages=messages,
-                extra_body={"reasoning": {"enabled": True}},
-            )
-        except Exception as e:
-            # Fallback: remove unsupported parameters for local models
-            if "extra_body" in str(e) or "reasoning" in str(e):
-                resp = await client.chat.completions.create(
-                    model=model_id,
-                    messages=messages,
-                )
-            else:
-                raise
+        resp = await _create_chat_completion_with_fallback(
+            client=client,
+            model=model_id,
+            messages=messages,
+            stream=False,
+            enable_reasoning=True,
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -622,25 +655,13 @@ async def _openrouter_stream(
 
     try:
         client = _get_llm_client()
-
-        # Try with reasoning support, fall back without it
-        try:
-            stream = await client.chat.completions.create(
-                model=model_id,
-                messages=messages,
-                stream=True,
-                extra_body={"reasoning": {"enabled": True}},
-            )
-        except Exception as e:
-            # Fallback: remove unsupported parameters for local models
-            if "extra_body" in str(e) or "reasoning" in str(e):
-                stream = await client.chat.completions.create(
-                    model=model_id,
-                    messages=messages,
-                    stream=True,
-                )
-            else:
-                raise
+        stream = await _create_chat_completion_with_fallback(
+            client=client,
+            model=model_id,
+            messages=messages,
+            stream=True,
+            enable_reasoning=True,
+        )
 
         async for chunk in stream:
             choice = chunk.choices[0]
