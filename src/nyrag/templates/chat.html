@@ -91,133 +91,34 @@
     </div>
   </div>
   <div id="crawl-modal" class="modal">
-    <div class="modal-content" style="max-width: 800px; height: 80vh;">
+    <div class="modal-content" style="max-width: 900px; height: 85vh;">
       <div class="modal-header">
         <h2>Crawl & Push Data</h2>
         <button class="close-crawl-btn close-btn">&times;</button>
       </div>
-      <div class="modal-body">
-        <p style="margin-top: 0; margin-bottom: 20px; color: var(--text-secondary);">Start the crawling process to fetch data and push it to Vespa.</p>
-        
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; flex-shrink: 0;">
-                <div style="display: flex; gap: 8px; flex: 1; min-width: 200px;">
-                    <select id="config-select" style="flex: 1;">
-                        <option value="" disabled selected>Select Config</option>
-                    </select>
-                    <button id="new-config-btn" class="secondary-btn">New</button>
-                    <button id="save-config-btn" class="secondary-btn">Save</button>
-                </div>
-                <div class="tab-container" style="display: flex; gap: 4px; background: var(--bg-color); padding: 4px; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
-                    <button id="tab-form" class="tab-btn active">Form</button>
-                    <button id="tab-yaml" class="tab-btn">YAML</button>
-                </div>
-            </div>
+      <div class="modal-body" style="padding: 0; display: flex; flex-direction: column;">
+        <!-- Top Controls Removed -->
 
-            <div id="config-scroll-container" style="flex: 1; overflow-y: auto; min-height: 0; margin-bottom: 16px; padding-right: 4px;">
-                <!-- Form View -->
-                <div id="config-form-view">
-                    <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
-                    <div class="form-group" style="margin: 0;">
-                        <label for="conf-name">Project Name</label>
-                        <input type="text" id="conf-name" placeholder="my-project">
-                    </div>
-                    <div class="form-group" style="margin: 0;">
-                        <label for="conf-mode">Mode</label>
-                        <select id="conf-mode">
-                            <option value="web">Web Crawl</option>
-                            <option value="docs">Local Files</option>
-                        </select>
-                    </div>
-                </div>
+        <!-- Interactive YAML Config -->
+        <div id="interactive-yaml-container" class="interactive-yaml-container"
+          style="flex: 1; min-height: 0; overflow-y: auto;">
+        </div>
 
-                <div class="form-group">
-                    <label for="conf-start-loc">Start URL / Path</label>
-                    <input type="text" id="conf-start-loc" placeholder="https://example.com">
-                </div>
-
-                <div class="form-group">
-                    <label for="conf-exclude">Exclude Patterns <span style="opacity: 0.6; font-weight: normal;">(one per line)</span></label>
-                    <textarea id="conf-exclude" rows="3" placeholder="https://example.com/login&#10;*.pdf"></textarea>
-                </div>
-
-                <details id="details-crawl" open style="margin-bottom: 16px;">
-                    <summary>Crawl Parameters</summary>
-                    <div>
-                        <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
-                            <div class="checkbox-group">
-                                <input type="checkbox" id="conf-robots" checked>
-                                <label for="conf-robots">Respect Robots.txt</label>
-                            </div>
-                            <div class="checkbox-group">
-                                <input type="checkbox" id="conf-subdomains" checked>
-                                <label for="conf-subdomains">Follow Subdomains</label>
-                            </div>
-                        </div>
-                        <div class="form-group" style="margin: 0;">
-                            <label for="conf-user-agent">User Agent</label>
-                            <select id="conf-user-agent">
-                                <option value="chrome">Chrome</option>
-                                <option value="firefox">Firefox</option>
-                                <option value="safari">Safari</option>
-                                <option value="bot">Bot</option>
-                            </select>
-                        </div>
-                    </div>
-                </details>
-
-                <details id="details-docs" style="margin-bottom: 16px; display: none;">
-                    <summary>Doc Parameters</summary>
-                    <div>
-                        <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
-                            <div class="checkbox-group">
-                                <input type="checkbox" id="conf-recursive" checked>
-                                <label for="conf-recursive">Recursive</label>
-                            </div>
-                            <div class="checkbox-group">
-                                <input type="checkbox" id="conf-hidden">
-                                <label for="conf-hidden">Include Hidden</label>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label for="conf-extensions">File Extensions <span style="opacity: 0.6; font-weight: normal;">(comma separated)</span></label>
-                            <input type="text" id="conf-extensions" placeholder=".pdf, .docx, .txt, .md">
-                        </div>
-                    </div>
-                </details>
-
-                <details>
-                    <summary>RAG Parameters</summary>
-                    <div>
-                        <div class="form-group">
-                            <label for="conf-embedding">Embedding Model</label>
-                            <input type="text" id="conf-embedding" value="sentence-transformers/all-MiniLM-L6-v2">
-                        </div>
-                        <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                            <div class="form-group" style="margin: 0;">
-                                <label for="conf-chunk-size">Chunk Size</label>
-                                <input type="number" id="conf-chunk-size" value="1024">
-                            </div>
-                            <div class="form-group" style="margin: 0;">
-                                <label for="conf-chunk-overlap">Overlap</label>
-                                <input type="number" id="conf-chunk-overlap" value="50">
-                            </div>
-                        </div>
-                    </div>
-                </details>
-            </div>
-            </div>
-
-            <!-- YAML View -->
-            <div id="config-yaml-view" style="display: none; flex: 1; min-height: 0; margin-bottom: 16px;">
-                <textarea id="crawl-config" style="width: 100%; height: 100%; font-family: monospace; padding: 12px; background: var(--bg-color); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); resize: none; box-sizing: border-box;"></textarea>
-            </div>
-
-        <div id="terminal-logs"
-          style="background: #0d0d0d; color: #d4d4d4; padding: 12px; border-radius: var(--radius-sm); height: 200px; overflow-y: auto; font-family: 'Menlo', 'Monaco', 'Courier New', monospace; font-size: 12px; white-space: pre-wrap; border: 1px solid var(--border-color); flex-shrink: 0;">
+        <!-- Logs / Status -->
+        <div
+          style="height: 150px; flex-shrink: 0; border-top: 1px solid var(--border-color); background: #0d0d0d; display: flex; flex-direction: column;">
+          <div
+            style="padding: 8px 12px; border-bottom: 1px solid #27272a; display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 12px; color: #a1a1aa; font-weight: 500;">Terminal Output</span>
+            <span id="terminal-status" style="font-size: 11px; color: var(--accent-color);">Ready</span>
+          </div>
+          <div id="terminal-logs"
+            style="flex: 1; overflow-y: auto; padding: 12px; font-family: 'Menlo', monospace; font-size: 11px; color: #d4d4d4; white-space: pre-wrap;">
+          </div>
         </div>
       </div>
       <div class="modal-footer">
-        <button id="start-crawl-btn" class="primary-btn">Start Crawl</button>
+        <button id="start-crawl-btn" class="primary-btn" style="width: 100%;">Start Crawl Process</button>
       </div>
     </div>
   </div>

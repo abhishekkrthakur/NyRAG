@@ -111,3 +111,81 @@ class Config(BaseModel):
     def is_docs_mode(self) -> bool:
         """Check if config is for document processing."""
         return self.mode == "docs"
+
+
+def get_config_options(mode: str = "web") -> Dict[str, Any]:
+    """
+    Return the interactive configuration schema for the frontend.
+    Dynamically hides irrelevant sections (crawl_params for docs, doc_params for web).
+    """
+    # Common base fields
+    schema = {
+        "name": {"type": "string", "label": "name"},
+        "mode": {"type": "select", "label": "mode", "options": ["web", "docs"]},
+        "start_location": {"type": "string", "label": "start_location"},
+        "exclude_patterns": {"type": "list", "label": "exclude_patterns"},
+    }
+
+    # Web Mode Specifics
+    if mode == "web":
+        schema["crawl_params"] = {
+            "type": "nested",
+            "label": "crawl_params",
+            "fields": {
+                "respect_robots_txt": {"type": "boolean", "label": "respect_robots_txt"},
+                "follow_subdomains": {"type": "boolean", "label": "follow_subdomains"},
+                "user_agent_type": {
+                    "type": "select",
+                    "label": "user_agent_type",
+                    "options": ["chrome", "firefox", "bot"],
+                },
+                "aggressive": {"type": "boolean", "label": "aggressive"},
+                "strict_mode": {"type": "boolean", "label": "strict_mode"},
+                "custom_user_agent": {"type": "string", "label": "custom_user_agent"},
+                "allowed_domains": {"type": "list", "label": "allowed_domains"},
+            },
+        }
+
+    # Doc Mode Specifics
+    if mode == "docs":
+        schema["doc_params"] = {
+            "type": "nested",
+            "label": "doc_params",
+            "fields": {
+                "recursive": {"type": "boolean", "label": "recursive"},
+                "include_hidden": {"type": "boolean", "label": "include_hidden"},
+                "follow_symlinks": {"type": "boolean", "label": "follow_symlinks"},
+                "max_file_size_mb": {"type": "number", "label": "max_file_size_mb"},
+                "file_extensions": {"type": "list", "label": "file_extensions"},
+            },
+        }
+
+    # Always include RAG and LLM params
+    schema["rag_params"] = {
+        "type": "nested",
+        "label": "rag_params",
+        "fields": {
+            "embedding_model": {"type": "string", "label": "embedding_model"},
+            "embedding_dim": {"type": "number", "label": "embedding_dim"},
+            "chunk_size": {"type": "number", "label": "chunk_size"},
+            "chunk_overlap": {"type": "number", "label": "chunk_overlap"},
+            "distance_metric": {
+                "type": "select",
+                "label": "distance_metric",
+                "options": ["angular", "euclidean", "dot", "hamming"],
+            },
+        },
+    }
+
+    schema["llm_config"] = {
+        "type": "nested",
+        "label": "llm_config",
+        "optional": True,
+        "fields": {
+            "base_url": {"type": "string", "label": "base_url"},
+            "model": {"type": "string", "label": "model"},
+            "api_key": {"type": "string", "label": "api_key", "masked": True},
+        },
+    }
+
+    return schema

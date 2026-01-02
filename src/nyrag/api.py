@@ -15,7 +15,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 
-from nyrag.config import Config
+from nyrag.config import Config, get_config_options
 from nyrag.logger import get_logger
 from nyrag.utils import (
     DEFAULT_EMBEDDING_MODEL,
@@ -30,6 +30,7 @@ from nyrag.utils import (
 DEFAULT_ENDPOINT = "http://localhost:8080"
 DEFAULT_RANKING = "default"
 DEFAULT_SUMMARY = "top_k_chunks"
+CONFIG_FILE = "nyrag_config.yml"
 
 
 class SearchRequest(BaseModel):
@@ -210,6 +211,11 @@ base_dir = Path(__file__).parent
 templates = Jinja2Templates(directory=str(base_dir / "templates"))
 app.mount("/static", StaticFiles(directory=str(base_dir / "static")), name="static")
 
+@app.get("/", response_class=HTMLResponse)
+async def get(request: Request):
+    return templates.TemplateResponse("chat.html", {"request": request})
+
+
 
 def _deep_find_numeric_field(obj: Any, key: str) -> Optional[float]:
     if isinstance(obj, dict):
@@ -282,53 +288,33 @@ class ConfigContent(BaseModel):
     content: str
 
 
-@app.get("/configs")
-async def list_configs() -> List[str]:
-    """List all configuration files in the configs directory."""
-    config_dir = Path("configs")
-    if not config_dir.exists():
-        return []
-    return [f.name for f in config_dir.glob("*.yml")]
+@app.get("/config/options")
+async def get_config_schema(mode: str = "web") -> Dict[str, Any]:
+    """Get the configuration schema options for the frontend."""
+    return get_config_options(mode)
 
 
-@app.get("/configs/{name}")
-async def get_config_file(name: str) -> Dict[str, str]:
-    """Get content of a specific configuration file."""
-    config_path = Path("configs") / name
+@app.get("/config")
+async def get_config() -> Dict[str, str]:
+    """Get content of the project configuration file."""
+    config_path = Path(CONFIG_FILE)
     if not config_path.exists():
-        raise HTTPException(status_code=404, detail="Config file not found")
+        # Return empty on purpose if missing, or we could return default structure
+        return {"content": ""}
     
-    # Security check to prevent directory traversal
-    try:
-        config_path.resolve().relative_to(Path("configs").resolve())
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Invalid config path")
-
     with open(config_path, "r") as f:
         return {"content": f.read()}
 
 
-@app.post("/configs/{name}")
-async def save_config_file(name: str, config: ConfigContent):
-    """Save content to a specific configuration file."""
-    config_dir = Path("configs")
-    config_dir.mkdir(exist_ok=True)
-    
-    config_path = config_dir / name
-    
-    # Security check
-    try:
-        config_path.resolve().relative_to(config_dir.resolve())
-    except ValueError:
-        # If file doesn't exist yet, resolve() might fail or behave differently depending on OS/impl
-        # But here we are constructing it from config_dir / name, so we just need to check 'name' doesn't have ..
-        if ".." in name or "/" in name or "\\" in name:
-             raise HTTPException(status_code=403, detail="Invalid config filename")
-
-    with open(config_path, "w") as f:
+@app.post("/config")
+async def save_config(config: ConfigContent):
+    """Save content to the project configuration file."""
+    # Security: Ensure we are only writing to the allowed filename in CWD
+    # (Though CWD is trusted here as per instructions)
+    with open(CONFIG_FILE, "w") as f:
         f.write(config.content)
     
-    return {"status": "saved", "name": name}
+    return {"status": "saved"}
 
 
 @app.post("/crawl/start")
@@ -799,116 +785,82 @@ async def _call_openrouter(
     return _extract_message_text(resp.choices[0].message.content)
 
 
-async def _openrouter_stream(
-    context: List[Dict[str, str]],
-    user_message: str,
-    model_id: str,
-    history: Optional[List[Dict[str, str]]] = None,
-) -> AsyncGenerator[Tuple[str, str], None]:
-    system_prompt = (
-        "You are a helpful assistant. Answer using only the provided context. "
-        "If the context is insufficient, say you don't know."
-    )
-    context_text = "\n\n".join(
-        [f"[{c.get('loc','')}] {c.get('chunk','')}" for c in context]
-    )
-
-    messages = [{"role": "system", "content": system_prompt}]
-
-    # Add conversation history if provided
-    if history:
-        messages.extend(history)
-
-    # Add current user message with context
-    messages.append(
-        {
-            "role": "user",
-            "content": f"Context:\n{context_text}\n\nQuestion: {user_message}",
-        }
-    )
-
+@app.post("/chat")
+async def chat(req: ChatRequest):
+    """Chat endpoint supporting retrieval, reasoning, and summarization."""
     try:
-        client = _get_llm_client()
+        return StreamingResponse(
+            _chat_stream(req), media_type="text/plain"
+        )
+    except Exception as e:
+        logger.error(f"Chat error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _chat_stream(req: ChatRequest):
+    """
+    Stream the chat process:
+    1. Search query generation (showing thinking)
+    2. Retrieval (showing sources)
+    3. Final answer generation (showing thinking + text)
+    """
+    # 1. Expand queries
+    queries = []
+    async for event_type, payload in _prepare_queries_stream(
+        req.message, req.model, req.query_k, req.hits, req.k, history=req.history
+    ):
+        if event_type == "thinking":
+            # Pass through reasoning from query generator if needed?
+            # For now we ignore it to reduce noise, or we could stream it.
+            pass
+        elif event_type == "result":
+            queries = payload
+
+    # 2. Retrieve and Fuse
+    used_queries, chunks = await _fuse_chunks(queries, req.hits, req.k)
+
+    # 3. Final Generation
+    system_prompt = (
+        "You are a helpful assistant. "
+        "Answer the user's question using ONLY the provided context chunks. "
+        "If the answer is not in the chunks, say so. "
+        "Do not hallucinate. "
+        "Cite the location of information using [filename] if possible."
+    )
+
+    context_text = ""
+    for c in chunks:
+        context_text += f"Source: {c.get('loc','')}\nContent: {c.get('chunk','')}\n\n"
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+    ]
+    # Add history
+    for msg in req.history[-4:]:
+        messages.append({"role": msg.get("role"), "content": msg.get("content")})
+    
+    messages.append({
+        "role": "user",
+        "content": f"Context:\n{context_text}\n\nQuestion: {req.message}"
+    })
+
+    client = _get_llm_client()
+    try:
         stream = await _create_chat_completion_with_fallback(
             client=client,
-            model=model_id,
+            model=req.model,
             messages=messages,
             stream=True,
-            enable_reasoning=True,
+            enable_reasoning=True
         )
 
         async for chunk in stream:
-            choice = chunk.choices[0]
-            delta = choice.delta
-            reasoning = _extract_message_text(getattr(delta, "reasoning", None))
-            if reasoning:
-                yield "thinking", reasoning
+             choice = chunk.choices[0]
+             delta = choice.delta
+             
+             content = _extract_message_text(getattr(delta, "content", None))
+             if content:
+                 yield content
 
-            content_piece = _extract_message_text(getattr(delta, "content", None))
-            if content_piece:
-                yield "token", content_piece
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@app.post("/chat")
-async def chat(req: ChatRequest) -> Dict[str, Any]:
-    model_id = req.model or settings.get("llm_model") or os.getenv("LLM_MODEL")
-    queries, chunks = await _fuse_chunks(
-        await _prepare_queries(
-            req.message, model_id, req.query_k, hits=req.hits, k=req.k
-        ),
-        hits=req.hits,
-        k=req.k,
-    )
-    if not chunks:
-        return {"answer": "No relevant context found.", "chunks": []}
-    answer = await _call_openrouter(chunks, req.message, model_id)
-    return {"answer": answer, "chunks": chunks, "queries": queries}
-
-
-@app.post("/chat-stream")
-async def chat_stream(req: ChatRequest):
-    model_id = req.model or settings.get("llm_model") or os.getenv("LLM_MODEL")
-
-    async def event_stream():
-        yield f"data: {json.dumps({'type': 'status', 'payload': 'Generating search queries...'})}\n\n"
-
-        queries = []
-        async for event_type, payload in _prepare_queries_stream(
-            req.message,
-            model_id,
-            req.query_k,
-            hits=req.hits,
-            k=req.k,
-            history=req.history,
-        ):
-            if event_type == "thinking":
-                yield f"data: {json.dumps({'type': 'thinking', 'payload': payload})}\n\n"
-            elif event_type == "result":
-                queries = payload
-
-        yield f"data: {json.dumps({'type': 'queries', 'payload': queries})}\n\n"
-        yield f"data: {json.dumps({'type': 'status', 'payload': 'Retrieving context from Vespa...'})}\n\n"
-        queries, chunks = await _fuse_chunks(queries, hits=req.hits, k=req.k)
-        yield f"data: {json.dumps({'type': 'chunks', 'payload': chunks})}\n\n"
-        if not chunks:
-            yield f"data: {json.dumps({'type': 'done', 'payload': 'No relevant context found.'})}\n\n"
-            return
-        yield f"data: {json.dumps({'type': 'status', 'payload': 'Generating answer...'})}\n\n"
-        async for type_, payload in _openrouter_stream(
-            chunks, req.message, model_id, req.history
-        ):
-            yield f"data: {json.dumps({'type': type_, 'payload': payload})}\n\n"
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream; charset=utf-8",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-    )
-
-
-@app.get("/", response_class=HTMLResponse)
-async def chat_ui(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse("chat.html", {"request": request})
+    except Exception as e:
+        yield f"Error generating response: {str(e)}"

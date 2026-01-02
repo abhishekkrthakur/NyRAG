@@ -752,7 +752,7 @@ details[open] summary {
   border-bottom: 1px solid var(--border-color);
 }
 
-details > div {
+details>div {
   padding: 16px;
 }
 
@@ -773,29 +773,7 @@ details > div {
   border-color: var(--text-secondary);
 }
 
-/* Tab Buttons */
-.tab-btn {
-  padding: 6px 12px;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-}
-
-.tab-btn:hover {
-  color: var(--text-primary);
-  background-color: rgba(255, 255, 255, 0.05);
-}
-
-.tab-btn.active {
-  background-color: var(--border-color);
-  color: var(--text-primary);
-}
-
+/* Modal Footer */
 .modal-footer {
   padding: 16px 24px;
   border-top: 1px solid var(--border-color);
@@ -816,4 +794,111 @@ details > div {
 
 .primary-btn:hover {
   background-color: var(--accent-hover);
+}
+
+/* Interactive YAML GUI */
+.interactive-yaml-container {
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 13px;
+  padding: 16px;
+  overflow-y: auto;
+  line-height: 1.6;
+}
+
+.yaml-line {
+  display: flex;
+  align-items: center;
+  /* Align items vertically */
+  white-space: pre;
+  min-height: 24px;
+  /* Ensure line has height even if empty */
+}
+
+.yaml-indent {
+  color: transparent;
+  flex-shrink: 0;
+}
+
+.yaml-key {
+  color: #8be9fd;
+  /* Cyan */
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.yaml-input,
+.yaml-select,
+.yaml-textarea {
+  background: transparent;
+  border: none;
+  /* No border */
+  color: #f1fa8c;
+  /* Yellow (String) */
+  font-family: inherit;
+  font-size: inherit;
+  padding: 0;
+  margin: 0;
+  outline: none;
+  flex: 1;
+  /* Take remaining space */
+  min-width: 0;
+  /* Allow shrinking if needed */
+  text-overflow: ellipsis;
+}
+
+.yaml-input:focus,
+.yaml-select:focus,
+.yaml-textarea:focus {
+  /* No border on focus either, maybe just a slight background to indicate active */
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.yaml-input::placeholder {
+  color: #6272a4;
+  font-style: italic;
+}
+
+.yaml-select {
+  color: #bd93f9;
+  /* Purple (Boolean/Enum) */
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  /* padding-right: 12px; */
+  /* Removed to keep it tight */
+  background-image: none;
+}
+
+/* For boolean specifically maybe another color */
+.yaml-select.bool-true {
+  color: #50fa7b;
+}
+
+/* Green */
+.yaml-select.bool-false {
+  color: #ff5555;
+}
+
+/* Red */
+
+.yaml-textarea {
+  display: block;
+  width: 100%;
+  resize: none;
+  color: #f1fa8c;
+  overflow: hidden;
+  height: auto;
+}
+
+.yaml-array-item {
+  display: flex;
+  align-items: center;
+}
+
+.yaml-dash {
+  color: var(--text-secondary);
+  margin-right: 8px;
+  flex-shrink: 0;
 }
