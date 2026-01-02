@@ -278,15 +278,57 @@ async def stats() -> Dict[str, Any]:
     }
 
 
-@app.get("/config")
-async def get_config() -> Dict[str, str]:
-    """Get the current configuration file content."""
-    config_path = os.getenv("NYRAG_CONFIG")
-    if not config_path or not os.path.exists(config_path):
+class ConfigContent(BaseModel):
+    content: str
+
+
+@app.get("/configs")
+async def list_configs() -> List[str]:
+    """List all configuration files in the configs directory."""
+    config_dir = Path("configs")
+    if not config_dir.exists():
+        return []
+    return [f.name for f in config_dir.glob("*.yml")]
+
+
+@app.get("/configs/{name}")
+async def get_config_file(name: str) -> Dict[str, str]:
+    """Get content of a specific configuration file."""
+    config_path = Path("configs") / name
+    if not config_path.exists():
         raise HTTPException(status_code=404, detail="Config file not found")
     
+    # Security check to prevent directory traversal
+    try:
+        config_path.resolve().relative_to(Path("configs").resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Invalid config path")
+
     with open(config_path, "r") as f:
-        return {"config": f.read()}
+        return {"content": f.read()}
+
+
+@app.post("/configs/{name}")
+async def save_config_file(name: str, config: ConfigContent):
+    """Save content to a specific configuration file."""
+    config_dir = Path("configs")
+    config_dir.mkdir(exist_ok=True)
+    
+    config_path = config_dir / name
+    
+    # Security check
+    try:
+        config_path.resolve().relative_to(config_dir.resolve())
+    except ValueError:
+        # If file doesn't exist yet, resolve() might fail or behave differently depending on OS/impl
+        # But here we are constructing it from config_dir / name, so we just need to check 'name' doesn't have ..
+        if ".." in name or "/" in name or "\\" in name:
+             raise HTTPException(status_code=403, detail="Invalid config filename")
+
+    with open(config_path, "w") as f:
+        f.write(config.content)
+    
+    return {"status": "saved", "name": name}
 
 
 @app.post("/crawl/start")

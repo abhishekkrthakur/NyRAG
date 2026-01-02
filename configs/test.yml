@@ -1,0 +1,11 @@
+# New Config: test.yml
+project:
+  name: my-project
+  mode: crawl
+
+output:
+  base_dir: output
+
+sources:
+  - url: https://example.com
+    depth: 1

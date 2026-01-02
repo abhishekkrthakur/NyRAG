@@ -24,8 +24,254 @@ const closeCrawlBtn = document.querySelector(".close-crawl-btn");
 const startCrawlBtn = document.getElementById("start-crawl-btn");
 const terminalLogs = document.getElementById("terminal-logs");
 const crawlConfig = document.getElementById("crawl-config");
+const configSelect = document.getElementById("config-select");
+const newConfigBtn = document.getElementById("new-config-btn");
+const saveConfigBtn = document.getElementById("save-config-btn");
+
+// Tabs & Views
+const tabForm = document.getElementById("tab-form");
+const tabYaml = document.getElementById("tab-yaml");
+const configFormView = document.getElementById("config-form-view");
+const configYamlView = document.getElementById("config-yaml-view");
+const configScrollContainer = document.getElementById("config-scroll-container");
+
+// Form Fields
+const confName = document.getElementById("conf-name");
+const confMode = document.getElementById("conf-mode");
+const confStartLoc = document.getElementById("conf-start-loc");
+const confExclude = document.getElementById("conf-exclude");
+const confRobots = document.getElementById("conf-robots");
+const confSubdomains = document.getElementById("conf-subdomains");
+const confUserAgent = document.getElementById("conf-user-agent");
+const confEmbedding = document.getElementById("conf-embedding");
+const confChunkSize = document.getElementById("conf-chunk-size");
+const confChunkOverlap = document.getElementById("conf-chunk-overlap");
+
+// Doc Params Fields
+const detailsCrawl = document.getElementById("details-crawl");
+const detailsDocs = document.getElementById("details-docs");
+const confRecursive = document.getElementById("conf-recursive");
+const confHidden = document.getElementById("conf-hidden");
+const confExtensions = document.getElementById("conf-extensions");
 
 let eventSource = null;
+let currentView = "form"; // 'form' or 'yaml'
+
+function updateModeVisibility() {
+    const mode = confMode.value;
+    if (mode === "web") {
+        detailsCrawl.style.display = "block";
+        detailsDocs.style.display = "none";
+    } else {
+        detailsCrawl.style.display = "none";
+        detailsDocs.style.display = "block";
+    }
+}
+
+confMode.onchange = updateModeVisibility;
+
+function yamlToForm(yamlStr) {
+    try {
+        const doc = jsyaml.load(yamlStr) || {};
+        
+        confName.value = doc.name || "";
+        confMode.value = doc.mode || "web";
+        confStartLoc.value = doc.start_loc || "";
+        
+        if (Array.isArray(doc.exclude)) {
+            confExclude.value = doc.exclude.join("\n");
+        } else {
+            confExclude.value = "";
+        }
+
+        const crawl = doc.crawl_params || {};
+        confRobots.checked = crawl.respect_robots_txt !== false; // default true
+        confSubdomains.checked = crawl.follow_subdomains !== false; // default true
+        confUserAgent.value = crawl.user_agent_type || "chrome";
+
+        const docs = doc.doc_params || {};
+        confRecursive.checked = docs.recursive !== false; // default true
+        confHidden.checked = docs.include_hidden === true; // default false
+        if (Array.isArray(docs.file_extensions)) {
+            confExtensions.value = docs.file_extensions.join(", ");
+        } else {
+            confExtensions.value = "";
+        }
+
+        const rag = doc.rag_params || {};
+        confEmbedding.value = rag.embedding_model || "sentence-transformers/all-MiniLM-L6-v2";
+        confChunkSize.value = rag.chunk_size || 1024;
+        confChunkOverlap.value = rag.chunk_overlap || 50;
+
+        updateModeVisibility();
+
+    } catch (e) {
+        console.error("Error parsing YAML for form:", e);
+        // If parsing fails, maybe switch to YAML view to show error?
+        // For now, just log it.
+    }
+}
+
+function formToYaml() {
+    const mode = confMode.value;
+    const doc = {
+        name: confName.value,
+        mode: mode,
+        start_loc: confStartLoc.value,
+        exclude: confExclude.value.split("\n").map(s => s.trim()).filter(s => s),
+        rag_params: {
+            embedding_model: confEmbedding.value,
+            chunk_size: parseInt(confChunkSize.value) || 1024,
+            chunk_overlap: parseInt(confChunkOverlap.value) || 50
+        }
+    };
+
+    if (mode === "web") {
+        doc.crawl_params = {
+            respect_robots_txt: confRobots.checked,
+            follow_subdomains: confSubdomains.checked,
+            user_agent_type: confUserAgent.value
+        };
+    } else {
+        doc.doc_params = {
+            recursive: confRecursive.checked,
+            include_hidden: confHidden.checked,
+            file_extensions: confExtensions.value.split(",").map(s => s.trim()).filter(s => s)
+        };
+        if (doc.doc_params.file_extensions.length === 0) {
+            delete doc.doc_params.file_extensions;
+        }
+    }
+    
+    // Preserve other fields if we had the original object? 
+    // For simplicity, we regenerate. Advanced users should use YAML view if they have custom fields.
+    return jsyaml.dump(doc);
+}
+
+function switchTab(view) {
+    if (view === currentView) return;
+
+    if (view === "form") {
+        // YAML -> Form
+        yamlToForm(crawlConfig.value);
+        configYamlView.style.display = "none";
+        configScrollContainer.style.display = "block";
+        tabYaml.classList.remove("active");
+        tabForm.classList.add("active");
+    } else {
+        // Form -> YAML
+        crawlConfig.value = formToYaml();
+        configScrollContainer.style.display = "none";
+        configYamlView.style.display = "block";
+        tabForm.classList.remove("active");
+        tabYaml.classList.add("active");
+    }
+    currentView = view;
+}
+
+tabForm.onclick = () => switchTab("form");
+tabYaml.onclick = () => switchTab("yaml");
+
+async function loadConfigs() {
+    try {
+        const res = await fetch("/configs");
+        if (res.ok) {
+            const configs = await res.json();
+            configSelect.innerHTML = '<option value="" disabled selected>Select Config</option>';
+            configs.forEach(config => {
+                const option = document.createElement("option");
+                option.value = config;
+                option.textContent = config;
+                configSelect.appendChild(option);
+            });
+        }
+    } catch (e) {
+        console.error("Failed to load configs", e);
+    }
+}
+
+configSelect.onchange = async () => {
+    const name = configSelect.value;
+    if (!name) return;
+    try {
+        const res = await fetch(`/configs/${name}`);
+        if (res.ok) {
+            const data = await res.json();
+            crawlConfig.value = data.content;
+            // If in form view, update form
+            if (currentView === "form") {
+                yamlToForm(data.content);
+            }
+        }
+    } catch (e) {
+        console.error("Failed to load config content", e);
+    }
+};
+
+newConfigBtn.onclick = () => {
+    const name = prompt("Enter new config filename (e.g., my_crawl.yml):");
+    if (!name) return;
+    
+    // Add to select and select it
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    configSelect.appendChild(option);
+    configSelect.value = name;
+    
+    // Default template
+    const defaultYaml = `# New Config: ${name}
+name: my-project
+mode: web
+start_loc: https://example.com
+exclude: []
+crawl_params:
+  respect_robots_txt: true
+  follow_subdomains: true
+  user_agent_type: chrome
+rag_params:
+  embedding_model: sentence-transformers/all-MiniLM-L6-v2
+  chunk_size: 1024
+  chunk_overlap: 50
+`;
+    crawlConfig.value = defaultYaml;
+    if (currentView === "form") {
+        yamlToForm(defaultYaml);
+    }
+};
+
+saveConfigBtn.onclick = async () => {
+    const name = configSelect.value;
+    if (!name) {
+        alert("Please select or create a config first.");
+        return;
+    }
+    
+    // Sync before saving
+    let content = crawlConfig.value;
+    if (currentView === "form") {
+        content = formToYaml();
+        crawlConfig.value = content; // Update textarea too
+    }
+
+    try {
+        const res = await fetch(`/configs/${name}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content: content })
+        });
+        if (res.ok) {
+            alert("Config saved!");
+            await loadConfigs();
+            configSelect.value = name;
+        } else {
+            alert("Failed to save config.");
+        }
+    } catch (e) {
+        console.error("Failed to save config", e);
+        alert("Error saving config.");
+    }
+};
 
 function connectToLogs() {
   if (eventSource) return;
@@ -57,28 +303,26 @@ function connectToLogs() {
 crawlBtn.onclick = async () => {
   crawlModal.style.display = "block";
   connectToLogs();
-  
-  // Fetch config
-  try {
-      const res = await fetch("/config");
-      if (res.ok) {
-          const data = await res.json();
-          crawlConfig.value = data.config;
-      }
-  } catch (e) {
-      console.error("Failed to fetch config", e);
-  }
+  await loadConfigs();
 };
 closeCrawlBtn.onclick = () => crawlModal.style.display = "none";
 
 startCrawlBtn.onclick = async () => {
   startCrawlBtn.disabled = true;
   startCrawlBtn.textContent = "Starting...";
+  
+  // Sync form to YAML if needed
+  let content = crawlConfig.value;
+  if (currentView === "form") {
+      content = formToYaml();
+      crawlConfig.value = content;
+  }
+
   try {
     const res = await fetch("/crawl/start", { 
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config_yaml: crawlConfig.value })
+        body: JSON.stringify({ config_yaml: content })
     });
     if (res.ok) {
       startCrawlBtn.textContent = "Crawl Started";
