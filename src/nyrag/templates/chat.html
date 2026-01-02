@@ -23,6 +23,11 @@
       </div>
       <p class="hint">Ask a question to retrieve context-aware answers.</p>
       <div id="corpus-stats" class="corpus-stats" aria-live="polite"></div>
+      <div class="project-selector-wrapper">
+        <select id="project-selector" class="project-selector" aria-label="Select Project">
+          <option value="">-- Active Project --</option>
+        </select>
+      </div>
       <div class="header-actions">
         <button id="crawl-btn" class="settings-btn" aria-label="Crawl Data">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -124,8 +129,9 @@
           </div>
         </div>
       </div>
-      <div class="modal-footer">
-        <button id="start-crawl-btn" class="primary-btn" style="width: 100%;">Start Crawl Process</button>
+      <div class="modal-footer" style="display: flex; gap: 12px;">
+        <button id="stop-crawl-btn" class="secondary-btn" style="flex: 0 0 auto; padding: 0 24px;">Stop</button>
+        <button id="start-crawl-btn" class="primary-btn" style="flex: 1;">Start Crawl Process</button>
       </div>
     </div>
   </div>

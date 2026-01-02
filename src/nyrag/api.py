@@ -7,7 +7,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -117,6 +117,42 @@ def _load_settings() -> Dict[str, Any]:
     }
 
 
+def list_available_projects() -> List[str]:
+    """List available projects (folders with conf.yml)."""
+    projects = []
+    output_dir = Path("output")
+    if output_dir.exists():
+        for project_dir in sorted(output_dir.iterdir()):
+            if project_dir.is_dir() and (project_dir / "conf.yml").exists():
+                projects.append(project_dir.name)
+    return projects
+
+
+def load_project_settings(project_name: str) -> Dict[str, Any]:
+    """Load settings from a specific project's conf.yml."""
+    vespa_url = (os.getenv("VESPA_URL") or "").strip() or "http://localhost"
+    vespa_port = resolve_vespa_port(vespa_url)
+    
+    config_path = Path("output") / project_name / "conf.yml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Project config not found: {config_path}")
+    
+    cfg = Config.from_yaml(str(config_path))
+    rag_params = cfg.rag_params or {}
+    llm_config = cfg.get_llm_config()
+    
+    return {
+        "app_package_name": cfg.get_app_package_name(),
+        "schema_name": cfg.get_schema_name(),
+        "embedding_model": rag_params.get("embedding_model", DEFAULT_EMBEDDING_MODEL),
+        "vespa_url": vespa_url,
+        "vespa_port": vespa_port,
+        "llm_base_url": llm_config.get("llm_base_url"),
+        "llm_model": llm_config.get("llm_model"),
+        "llm_api_key": llm_config.get("llm_api_key"),
+    }
+
+
 class CrawlManager:
     def __init__(self):
         self.process = None
@@ -127,7 +163,22 @@ class CrawlManager:
         if self.process and self.process.returncode is None:
             return  # Already running
 
-        # Create temp file for config
+        # Parse config to get output path and save conf.yml
+        import yaml
+        config_data = yaml.safe_load(config_yaml)
+        project_name = config_data.get("name", "project")
+        clean_name = project_name.replace("-", "").replace("_", "").lower()
+        schema_name = f"nyrag{clean_name}"
+        output_dir = Path("output") / schema_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save config to output folder
+        config_path = output_dir / "conf.yml"
+        with open(config_path, "w") as f:
+            f.write(config_yaml)
+        logger.info(f"Config saved to {config_path}")
+
+        # Also create temp file for the subprocess
         fd, self.temp_config_path = tempfile.mkstemp(suffix=".yml", text=True)
         with os.fdopen(fd, "w") as f:
             f.write(config_yaml)
@@ -152,6 +203,8 @@ class CrawlManager:
             if not line:
                 break
             decoded_line = line.decode("utf-8").rstrip()
+            # Log to server terminal
+            logger.info(decoded_line)
             for q in self.subscribers:
                 await q.put(decoded_line)
 
@@ -168,6 +221,22 @@ class CrawlManager:
         # Notify completion
         for q in self.subscribers:
             await q.put("EOF")
+
+    async def stop_crawl(self):
+        """Stop the running crawl process."""
+        if self.process and self.process.returncode is None:
+            self.process.terminate()
+            try:
+                await asyncio.wait_for(self.process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self.process.kill()
+            
+            # Notify subscribers
+            for q in self.subscribers:
+                await q.put("EOF")
+            
+            return True
+        return False
 
     async def stream_logs(self):
         q = asyncio.Queue()
@@ -323,6 +392,23 @@ async def list_example_configs() -> Dict[str, str]:
     return get_example_configs()
 
 
+@app.get("/projects")
+async def get_projects():
+    """List available projects."""
+    return list_available_projects()
+
+
+@app.post("/projects/select")
+async def select_project(project_name: str = Body(..., embed=True)):
+    """Select a project and load its settings."""
+    global settings
+    try:
+        settings = load_project_settings(project_name)
+        return {"status": "success", "settings": settings}
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @app.post("/crawl/start")
 async def start_crawl(req: CrawlRequest):
     await crawl_manager.start_crawl(req.config_yaml)
@@ -334,6 +420,13 @@ async def stream_crawl_logs():
     return StreamingResponse(
         crawl_manager.stream_logs(), media_type="text/event-stream"
     )
+
+
+@app.post("/crawl/stop")
+async def stop_crawl():
+    """Stop the running crawl process."""
+    stopped = await crawl_manager.stop_crawl()
+    return {"status": "stopped" if stopped else "not_running"}
 
 
 @app.post("/search")

@@ -27,6 +27,14 @@ class DocParams(BaseModel):
     file_extensions: Optional[List[str]] = None
 
 
+class LLMConfig(BaseModel):
+    """Configuration for LLM providers."""
+
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+
+
 class Config(BaseModel):
     """Configuration model for nyrag."""
 
@@ -37,6 +45,7 @@ class Config(BaseModel):
     rag_params: Optional[Dict[str, Any]] = None
     crawl_params: Optional[CrawlParams] = None
     doc_params: Optional[DocParams] = None
+    llm_config: Optional[LLMConfig] = None
 
     @field_validator("mode")
     @classmethod
@@ -95,9 +104,17 @@ class Config(BaseModel):
         }
 
     def get_llm_config(self) -> Dict[str, Any]:
-        """Get LLM configuration from rag_params."""
+        """Get LLM configuration from llm_config or rag_params (legacy)."""
+        if self.llm_config:
+            return {
+                "llm_base_url": self.llm_config.base_url,
+                "llm_model": self.llm_config.model,
+                "llm_api_key": self.llm_config.api_key,
+            }
+        
         if self.rag_params is None:
             return {}
+            
         return {
             "llm_base_url": self.rag_params.get("llm_base_url"),
             "llm_model": self.rag_params.get("llm_model"),

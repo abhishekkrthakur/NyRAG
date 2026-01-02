@@ -36,4 +36,4 @@ rag_params:
 llm_config:
   base_url: https://openrouter.ai/api/v1
   model: gpt-4
-  api_key: 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
+  api_key: ''

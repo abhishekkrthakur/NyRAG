@@ -18,10 +18,15 @@ const crawlBtn = document.getElementById("crawl-btn");
 const crawlModal = document.getElementById("crawl-modal");
 const closeCrawlBtn = document.querySelector(".close-crawl-btn");
 const startCrawlBtn = document.getElementById("start-crawl-btn");
+const stopCrawlBtn = document.getElementById("stop-crawl-btn");
 const terminalLogs = document.getElementById("terminal-logs");
 const terminalStatus = document.getElementById("terminal-status");
 const yamlContainer = document.getElementById("interactive-yaml-container");
 const exampleSelect = document.getElementById("example-select");
+const projectSelector = document.getElementById("project-selector");
+
+// Track current event source for stopping
+let currentEventSource = null;
 
 // Internal Config State
 let currentConfig = {};
@@ -361,45 +366,71 @@ startCrawlBtn.onclick = async () => {
     // 1. Save Config First
     await saveProjectConfig();
 
-    terminalStatus.textContent = "Running...";
+    terminalStatus.textContent = "Starting...";
     terminalStatus.style.color = "var(--accent-color)";
 
     // 2. Start Crawl with the YAML content
-    // We send the YAML content directly to be safe, or we could tell backend to read file.
-    // Given the previous pattern, let's send the content to ensure sync.
     const yamlStr = jsyaml.dump(currentConfig);
 
-    const res = await fetch("/crawl/start", {
+    const startRes = await fetch("/crawl/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ config_yaml: yamlStr })
     });
 
-    if (!res.ok) {
-      terminalLogs.textContent += `Error starting crawl: ${res.statusText}\n`;
+    if (!startRes.ok) {
+      terminalLogs.textContent += `Error starting crawl: ${startRes.statusText}\n`;
       terminalStatus.textContent = "Failed";
       terminalStatus.style.color = "#ef4444";
       return;
     }
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
+    terminalStatus.textContent = "Running...";
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      const text = decoder.decode(value);
-      terminalLogs.textContent += text;
+    // 3. Connect to log stream using EventSource (SSE)
+    currentEventSource = new EventSource("/crawl/logs");
+
+    currentEventSource.onmessage = (event) => {
+      if (event.data === "[PROCESS COMPLETED]") {
+        currentEventSource.close();
+        currentEventSource = null;
+        terminalStatus.textContent = "Completed";
+        terminalStatus.style.color = "#10b981";
+        return;
+      }
+      terminalLogs.textContent += event.data + "\n";
       terminalLogs.scrollTop = terminalLogs.scrollHeight;
-    }
+    };
 
-    terminalStatus.textContent = "Completed";
-    terminalStatus.style.color = "#10b981"; // Green
+    currentEventSource.onerror = () => {
+      currentEventSource.close();
+      currentEventSource = null;
+      if (terminalStatus.textContent === "Running...") {
+        terminalStatus.textContent = "Completed";
+        terminalStatus.style.color = "#10b981";
+      }
+    };
 
   } catch (e) {
     terminalLogs.textContent += `Connection error: ${e.message}\n`;
     terminalStatus.textContent = "Error";
     terminalStatus.style.color = "#ef4444";
+  }
+};
+
+// Stop Crawl Button
+stopCrawlBtn.onclick = async () => {
+  try {
+    await fetch("/crawl/stop", { method: "POST" });
+    if (currentEventSource) {
+      currentEventSource.close();
+      currentEventSource = null;
+    }
+    terminalLogs.textContent += "\n[Crawl stopped by user]\n";
+    terminalStatus.textContent = "Stopped";
+    terminalStatus.style.color = "#f59e0b"; // Orange
+  } catch (e) {
+    console.error("Failed to stop crawl", e);
   }
 };
 
@@ -480,8 +511,69 @@ function addMessage(role, text) {
   return id;
 }
 
-fetch("/stats").then(r => r.json()).then(data => {
-  if (data.documents) {
-    statsEl.textContent = `${data.documents} documents indexed`;
+async function fetchStats() {
+  try {
+    const res = await fetch("/stats");
+    const data = await res.json();
+    if (data.documents) {
+      statsEl.textContent = `${data.documents} documents indexed`;
+    } else {
+      statsEl.textContent = "No documents indexed";
+    }
+  } catch (e) {
+    console.error("Failed to fetch stats", e);
+    statsEl.textContent = "Error loading stats";
   }
-}).catch(() => { });
+}
+
+async function loadProjects() {
+  try {
+    const res = await fetch("/projects");
+    const projects = await res.json();
+
+    // Maintain default option
+    projectSelector.innerHTML = '<option value="">-- Active Project --</option>';
+
+    projects.forEach(p => {
+      const opt = document.createElement("option");
+      opt.value = p;
+      opt.textContent = p;
+      projectSelector.appendChild(opt);
+    });
+  } catch (e) {
+    console.error("Failed to load projects", e);
+  }
+}
+
+projectSelector.onchange = async () => {
+  const projectName = projectSelector.value;
+  if (!projectName) return;
+
+  try {
+    const res = await fetch("/projects/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project_name: projectName })
+    });
+
+    const data = await res.json();
+    if (data.status === "success") {
+      // Clear chat
+      chatEl.innerHTML = `
+        <div class="welcome-message">
+          <h2>Active Project: ${projectName}</h2>
+          <p style="margin-top: 8px; font-size: 14px; opacity: 0.6;">Settings loaded from output/${projectName}/conf.yml</p>
+        </div>
+      `;
+      // Refresh stats
+      fetchStats();
+    }
+  } catch (e) {
+    console.error("Failed to select project", e);
+    alert("Error switching project: " + e.message);
+  }
+};
+
+// Initial calls
+loadProjects();
+fetchStats();

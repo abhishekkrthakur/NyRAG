@@ -95,6 +95,26 @@ body {
   opacity: 0.75;
 }
 
+.project-selector-wrapper {
+  margin: 8px 0 0;
+}
+
+.project-selector {
+  background: var(--panel-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+  min-width: 200px;
+}
+
+.project-selector:focus {
+  border-color: var(--accent-color);
+}
+
 /* Chat Area */
 .chat-area {
   flex: 1;
