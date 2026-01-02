@@ -592,23 +592,6 @@ async function sendMessage() {
               thinkingContent = "";
             } else if (event === "sources") {
               chunksCache = data;
-              const locs = [...new Set(data.map(c => c.loc))];
-
-              const details = document.createElement("details");
-              details.className = "meta-details";
-              const summary = document.createElement("summary");
-              summary.textContent = `Sources (${locs.length})`;
-              details.appendChild(summary);
-
-              const ul = document.createElement("ul");
-              locs.forEach((loc) => {
-                const li = document.createElement("li");
-                li.textContent = loc;
-                ul.appendChild(li);
-              });
-              details.appendChild(ul);
-              metaEl.appendChild(details);
-
               // Reset thinking for next phase
               thinkingEl = null;
               thinkingContent = "";
@@ -715,6 +698,24 @@ async function fetchStats() {
 
 async function loadProjects() {
   try {
+    // First check if NYRAG_CONFIG is active
+    const modeRes = await fetch("/config/mode");
+    const modeData = await modeRes.json();
+
+    // If NYRAG_CONFIG is set, hide the project selector
+    const formGroup = projectSelector.parentElement;
+    if (!modeData.allow_project_selection) {
+      formGroup.style.display = 'none';
+      // Update active project indicator
+      const indicator = document.getElementById("active-project-indicator");
+      if (indicator) {
+        indicator.textContent = `Config: ${modeData.config_path.split('/').pop()}`;
+      }
+      return;
+    }
+
+    // Normal project-based mode
+    formGroup.style.display = 'block';
     const res = await fetch("/projects");
     const projects = await res.json();
 

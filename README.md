@@ -255,9 +255,13 @@ Open http://localhost:8000/chat
 |----------|-------------|
 | `NYRAG_CONFIG` | Path to config file |
 | `VESPA_URL` | Vespa endpoint URL (optional for local, required for cloud) |
+| `VESPA_SCHEMA` | Override schema name from config |
+| `EMBEDDING_MODEL` | Override embedding model from config |
 | `LLM_BASE_URL` | LLM API base URL (OpenAI-compatible API) |
 | `LLM_MODEL` | LLM model name |
 | `LLM_API_KEY` | LLM API key |
+
+**Configuration Priority:** Environment variables always take precedence over config file values. When both are set, env vars override the config file.
 
 ---
 

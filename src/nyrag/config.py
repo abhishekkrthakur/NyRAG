@@ -111,10 +111,10 @@ class Config(BaseModel):
                 "llm_model": self.llm_config.model,
                 "llm_api_key": self.llm_config.api_key,
             }
-        
+
         if self.rag_params is None:
             return {}
-            
+
         return {
             "llm_base_url": self.rag_params.get("llm_base_url"),
             "llm_model": self.rag_params.get("llm_model"),
