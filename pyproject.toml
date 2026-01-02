@@ -53,7 +53,7 @@ Homepage = "https://github.com/abhishekkrthakur/nyrag"
 Issues = "https://github.com/abhishekkrthakur/nyrag/issues"
 
 [tool.setuptools.package-data]
-nyrag = ["static/*", "templates/*"]
+nyrag = ["static/*", "templates/*", "examples/*"]
 
 [tool.isort]
 ensure_newline_before_comments = true

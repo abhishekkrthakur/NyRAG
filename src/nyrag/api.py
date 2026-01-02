@@ -15,7 +15,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 
-from nyrag.config import Config, get_config_options
+from nyrag.config import Config, get_config_options, get_example_configs
 from nyrag.logger import get_logger
 from nyrag.utils import (
     DEFAULT_EMBEDDING_MODEL,
@@ -315,6 +315,12 @@ async def save_config(config: ConfigContent):
         f.write(config.content)
     
     return {"status": "saved"}
+
+
+@app.get("/config/examples")
+async def list_example_configs() -> Dict[str, str]:
+    """List available example configurations."""
+    return get_example_configs()
 
 
 @app.post("/crawl/start")

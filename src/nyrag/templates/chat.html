@@ -97,7 +97,14 @@
         <button class="close-crawl-btn close-btn">&times;</button>
       </div>
       <div class="modal-body" style="padding: 0; display: flex; flex-direction: column;">
-        <!-- Top Controls Removed -->
+        <!-- Example Selector -->
+        <div
+          style="padding: 12px 24px; border-bottom: 1px solid var(--border-color); display: flex; gap: 12px; align-items: center; background: var(--panel-bg);">
+          <label style="font-size: 13px; color: #a1a1aa;">Load Example:</label>
+          <select id="example-select" style="flex: 1; max-width: 300px;">
+            <option value="">-- Select an example --</option>
+          </select>
+        </div>
 
         <!-- Interactive YAML Config -->
         <div id="interactive-yaml-container" class="interactive-yaml-container"

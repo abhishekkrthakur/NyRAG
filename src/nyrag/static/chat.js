@@ -21,17 +21,19 @@ const startCrawlBtn = document.getElementById("start-crawl-btn");
 const terminalLogs = document.getElementById("terminal-logs");
 const terminalStatus = document.getElementById("terminal-status");
 const yamlContainer = document.getElementById("interactive-yaml-container");
+const exampleSelect = document.getElementById("example-select");
 
 // Internal Config State
 let currentConfig = {};
 let configOptions = {}; // Schema loaded from API
+let exampleConfigs = {}; // Example configs from API
 
 // Fallback Default if file is empty
 const FALLBACK_CONFIG = {
   name: "new-project",
   mode: "web",
-  start_location: "https://example.com",
-  exclude_patterns: [],
+  start_loc: "https://example.com",
+  exclude: [],
   crawl_params: {
     respect_robots_txt: true,
     follow_subdomains: true,
@@ -298,9 +300,50 @@ async function saveProjectConfig() {
   });
 }
 
+// Load and populate example configs
+async function loadExamples() {
+  try {
+    const res = await fetch("/config/examples");
+    exampleConfigs = await res.json();
+
+    // Populate dropdown
+    exampleSelect.innerHTML = '<option value="">-- Select an example --</option>';
+    Object.keys(exampleConfigs).forEach(name => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      exampleSelect.appendChild(opt);
+    });
+  } catch (e) {
+    console.error("Failed to load examples", e);
+  }
+}
+
+// Handle example selection
+exampleSelect.onchange = async () => {
+  const name = exampleSelect.value;
+  if (!name || !exampleConfigs[name]) return;
+
+  try {
+    const parsed = jsyaml.load(exampleConfigs[name]);
+    // Merge: start with defaults, then override with example values
+    currentConfig = deepMerge(JSON.parse(JSON.stringify(FALLBACK_CONFIG)), parsed);
+
+    const mode = currentConfig.mode || "web";
+    await loadSchema(mode);
+    renderConfigEditor();
+
+    terminalStatus.textContent = `Loaded: ${name}`;
+    terminalStatus.style.color = "#10b981";
+  } catch (e) {
+    console.error("Failed to parse example", e);
+  }
+};
+
 // Crawl Modal Logic
 crawlBtn.onclick = () => {
   crawlModal.style.display = "block";
+  loadExamples();
   loadProjectConfig();
 };
 closeCrawlBtn.onclick = () => crawlModal.style.display = "none";

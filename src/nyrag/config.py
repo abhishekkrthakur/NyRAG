@@ -122,8 +122,8 @@ def get_config_options(mode: str = "web") -> Dict[str, Any]:
     schema = {
         "name": {"type": "string", "label": "name"},
         "mode": {"type": "select", "label": "mode", "options": ["web", "docs"]},
-        "start_location": {"type": "string", "label": "start_location"},
-        "exclude_patterns": {"type": "list", "label": "exclude_patterns"},
+        "start_loc": {"type": "string", "label": "start_loc"},
+        "exclude": {"type": "list", "label": "exclude"},
     }
 
     # Web Mode Specifics
@@ -189,3 +189,25 @@ def get_config_options(mode: str = "web") -> Dict[str, Any]:
     }
 
     return schema
+
+
+def get_example_configs() -> Dict[str, str]:
+    """
+    Return available example configurations from the package.
+    Returns a dict of {name: yaml_content}.
+    """
+    import importlib.resources as pkg_resources
+
+    examples: Dict[str, str] = {}
+    try:
+        # Python 3.9+ style
+        files = pkg_resources.files("nyrag.examples")
+        for item in files.iterdir():
+            if item.name.endswith(".yml") or item.name.endswith(".yaml"):
+                name = item.name.rsplit(".", 1)[0]
+                examples[name] = item.read_text()
+    except Exception:
+        # Fallback for older Python or missing package
+        pass
+
+    return examples
