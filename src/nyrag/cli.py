@@ -19,16 +19,12 @@ def cmd_process(args):
         if args.resume:
             logger.info("Resume mode enabled - will skip already processed items")
 
-        logger.info(
-            "Vespa feeding enabled - documents will be fed to Vespa as they are processed"
-        )
+        logger.info("Vespa feeding enabled - documents will be fed to Vespa as they are processed")
 
         # Process based on config
         process_from_config(config, resume=args.resume)
 
-        logger.success(
-            f"Processing complete! Output saved to {config.get_output_path()}"
-        )
+        logger.success(f"Processing complete! Output saved to {config.get_output_path()}")
 
     except FileNotFoundError:
         logger.error(f"Configuration file not found: {args.config}")
@@ -48,9 +44,7 @@ def cmd_ui(args):
         logger.info(f"Starting UI server on {args.host}:{args.port}")
         uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
     except ImportError:
-        logger.error(
-            "uvicorn is required to run the UI. Install it with: pip install uvicorn"
-        )
+        logger.error("uvicorn is required to run the UI. Install it with: pip install uvicorn")
         sys.exit(1)
     except Exception as e:
         logger.error(f"Error starting UI server: {str(e)}")

@@ -360,6 +360,7 @@ crawlBtn.onclick = () => {
   crawlModal.style.display = "block";
   loadExamples();
   loadProjectConfig();
+  checkCrawlStatus();
 };
 closeCrawlBtn.onclick = () => crawlModal.style.display = "none";
 window.onclick = (e) => {
@@ -380,6 +381,49 @@ function updateCrawlButton(isRunning) {
     crawlActionBtn.classList.add("primary-btn");
     crawlActionBtn.style.backgroundColor = ""; // Reset to default
     crawlActionBtn.style.color = "";
+  }
+}
+
+async function checkCrawlStatus() {
+  try {
+    const res = await fetch("/crawl/status");
+    const data = await res.json();
+    if (data.is_running) {
+      updateCrawlButton(true);
+      terminalStatus.textContent = "Running...";
+      terminalStatus.style.color = "var(--accent-color)";
+
+      if (!currentEventSource) {
+        currentEventSource = new EventSource("/crawl/logs");
+        currentEventSource.onmessage = (event) => {
+          if (event.data === "[PROCESS COMPLETED]") {
+            currentEventSource.close();
+            currentEventSource = null;
+            terminalStatus.textContent = "Completed";
+            terminalStatus.style.color = "#10b981";
+            updateCrawlButton(false);
+            return;
+          }
+          terminalLogs.textContent += event.data + "\n";
+          terminalLogs.scrollTop = terminalLogs.scrollHeight;
+        };
+        currentEventSource.onerror = () => {
+          currentEventSource.close();
+          currentEventSource = null;
+          if (terminalStatus.textContent === "Running...") {
+            terminalStatus.textContent = "Completed";
+            terminalStatus.style.color = "#10b981";
+          }
+          updateCrawlButton(false);
+        };
+      }
+    } else {
+      // If not running, we might want to check if there are logs from a previous run?
+      // For now, just ensure button state is correct.
+      updateCrawlButton(false);
+    }
+  } catch (e) {
+    console.error("Failed to check crawl status", e);
   }
 }
 
