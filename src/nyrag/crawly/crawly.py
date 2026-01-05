@@ -43,10 +43,13 @@ class Crawly(CrawlSpider):
         strict_mode: bool = False,  # New parameter
         processed_urls: Optional[set] = None,  # New parameter for resume
         feeder_callback: Optional[callable] = None,  # New parameter for Vespa feeding
+        stop_on_feed_error: bool = True,  # Stop crawling if feeding fails
         *args,
         **kwargs,
     ):
         self.processed_urls = processed_urls if processed_urls else set()
+        self.stop_on_feed_error = stop_on_feed_error
+        self.feeding_error: Optional[Exception] = None
 
         # Handle single URL or list of URLs
         self.start_urls = [start_urls] if isinstance(start_urls, str) else start_urls
@@ -214,6 +217,9 @@ class Crawly(CrawlSpider):
                 )
             except Exception as e:
                 logger.error(f"Failed to feed {response.url} to Vespa: {e}")
+                if self.stop_on_feed_error:
+                    self.feeding_error = e
+                    raise
 
 
 def crawl_web(
@@ -231,6 +237,7 @@ def crawl_web(
     resume=False,  # New parameter for resume
     processed_urls=None,  # New parameter for resume
     feeder_callback=None,  # New parameter for Vespa feeding
+    stop_on_feed_error=True,  # Stop crawling if feeding fails
 ):
     configure_logging(install_root_handler=False)
 
@@ -309,5 +316,6 @@ def crawl_web(
         custom_user_agent=custom_user_agent,
         processed_urls=(processed_urls if resume else set()),  # Pass processed URLs if resuming
         feeder_callback=feeder_callback,  # Pass feeder callback
+        stop_on_feed_error=stop_on_feed_error,  # Stop on feed error
     )
     process.start()

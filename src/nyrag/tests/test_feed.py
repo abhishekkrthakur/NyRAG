@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from nyrag.config import Config
+from nyrag.config import Config, RAGParams
 from nyrag.feed import VespaFeeder
 
 
@@ -15,12 +15,11 @@ def mock_config():
         name="test_app",
         mode="web",
         start_loc="https://example.com",
-        rag_params={
-            "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
-            "chunk_size": 512,
-            "chunk_overlap": 50,
-            "embedding_batch_size": 32,
-        },
+        rag_params=RAGParams(
+            embedding_model="sentence-transformers/all-MiniLM-L6-v2",
+            chunk_size=512,
+            chunk_overlap=50,
+        ),
     )
     return config
 
@@ -51,7 +50,6 @@ class TestVespaFeeder:
         assert feeder.embedding_model_name == "sentence-transformers/all-MiniLM-L6-v2"
         assert feeder.chunk_size == 512
         assert feeder.chunk_overlap == 50
-        assert feeder.embedding_batch_size == 32
         mock_transformer.assert_called_once_with("sentence-transformers/all-MiniLM-L6-v2")
 
     @patch("nyrag.feed.SentenceTransformer")

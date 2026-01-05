@@ -16,15 +16,9 @@ from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 
 from nyrag.config import Config, get_config_options, get_example_configs
+from nyrag.defaults import DEFAULT_EMBEDDING_MODEL, DEFAULT_LLM_BASE_URL, DEFAULT_VESPA_LOCAL_PORT, DEFAULT_VESPA_URL
 from nyrag.logger import get_logger
-from nyrag.utils import (
-    DEFAULT_EMBEDDING_MODEL,
-    get_vespa_tls_config,
-    is_vespa_cloud,
-    make_vespa_client,
-    resolve_vespa_cloud_mtls_paths,
-    resolve_vespa_port,
-)
+from nyrag.utils import get_tls_config_from_deploy, make_vespa_client, resolve_vespa_cloud_mtls_paths
 
 
 DEFAULT_ENDPOINT = "http://localhost:8080"
@@ -122,22 +116,29 @@ class CrawlRequest(BaseModel):
     config_yaml: str = Field(..., description="YAML configuration content")
 
 
-def _resolve_mtls_paths(vespa_url: str, project_folder: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
-    cert_env = (os.getenv("VESPA_CLIENT_CERT") or "").strip() or None
-    key_env = (os.getenv("VESPA_CLIENT_KEY") or "").strip() or None
+def _resolve_mtls_paths(
+    config: Optional[Config], project_folder: Optional[str]
+) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve mTLS paths from config or default locations."""
+    deploy_config = config.get_deploy_config() if config else None
 
-    if not is_vespa_cloud(vespa_url):
-        return cert_env, key_env
+    # Check TLS config first
+    if deploy_config and deploy_config.tls:
+        tls = deploy_config.tls
+        if tls.client_cert or tls.client_key:
+            if not (tls.client_cert and tls.client_key):
+                raise RuntimeError("Vespa Cloud requires both tls.client_cert and tls.client_key.")
+            return tls.client_cert, tls.client_key
 
-    if cert_env or key_env:
-        if not (cert_env and key_env):
-            raise RuntimeError("Vespa Cloud requires both VESPA_CLIENT_CERT and VESPA_CLIENT_KEY.")
-        return cert_env, key_env
+    # If not cloud mode, no mTLS needed
+    if not deploy_config or not deploy_config.is_cloud_mode():
+        return None, None
 
+    # Try default locations for cloud mode
     if not project_folder:
         raise RuntimeError(
             "Vespa Cloud mTLS credentials not found. "
-            "Export VESPA_CLIENT_CERT and VESPA_CLIENT_KEY with the paths to these files."
+            "Set deploy.tls.client_cert and deploy.tls.client_key in config."
         )
 
     cert_path, key_path = resolve_vespa_cloud_mtls_paths(project_folder)
@@ -147,42 +148,48 @@ def _resolve_mtls_paths(vespa_url: str, project_folder: Optional[str]) -> Tuple[
     raise RuntimeError(
         "Vespa Cloud mTLS credentials not found at "
         f"{cert_path} and {key_path}. "
-        "Export VESPA_CLIENT_CERT and VESPA_CLIENT_KEY with the paths to these files."
+        "Set deploy.tls.client_cert and deploy.tls.client_key in config."
     )
 
 
-def _load_settings() -> Dict[str, Any]:
-    """Load schema, model, and Vespa connection from env or YAML config."""
-    config_path = os.getenv("NYRAG_CONFIG")
-    vespa_url = (os.getenv("VESPA_URL") or "").strip() or "http://localhost"
-    vespa_port = resolve_vespa_port(vespa_url)
+def _load_settings_from_config(cfg: Config) -> Dict[str, Any]:
+    """Load settings from a Config object. No environment variables are used."""
+    vespa_url = cfg.get_vespa_url()
+    vespa_port = cfg.get_vespa_port()
+    llm_config = cfg.get_llm_config()
 
-    if config_path and Path(config_path).exists():
-        cfg = Config.from_yaml(config_path)
-        rag_params = cfg.rag_params or {}
-        llm_config = cfg.get_llm_config()
-        return {
-            "app_package_name": cfg.get_app_package_name(),
-            # Env vars override config file
-            "schema_name": os.getenv("VESPA_SCHEMA") or cfg.get_schema_name(),
-            "embedding_model": os.getenv("EMBEDDING_MODEL")
-            or rag_params.get("embedding_model", DEFAULT_EMBEDDING_MODEL),
-            "vespa_url": vespa_url,
-            "vespa_port": vespa_port,
-            "llm_base_url": os.getenv("LLM_BASE_URL") or llm_config.get("llm_base_url"),
-            "llm_model": os.getenv("LLM_MODEL") or llm_config.get("llm_model"),
-            "llm_api_key": os.getenv("LLM_API_KEY") or llm_config.get("llm_api_key"),
-        }
+    return {
+        "app_package_name": cfg.get_app_package_name(),
+        "schema_name": cfg.get_schema_name(),
+        "embedding_model": cfg.get_embedding_model(),
+        "vespa_url": vespa_url,
+        "vespa_port": vespa_port,
+        "llm_base_url": llm_config.get("llm_base_url"),
+        "llm_model": llm_config.get("llm_model"),
+        "llm_api_key": llm_config.get("llm_api_key"),
+        "config": cfg,
+    }
+
+
+def _get_default_settings() -> Dict[str, Any]:
+    """Return default settings when no config is available.
+
+    Uses environment variables for Vespa connection settings.
+    """
+    vespa_url = os.getenv("VESPA_URL", DEFAULT_VESPA_URL)
+    port_str = os.getenv("VESPA_PORT")
+    vespa_port = int(port_str) if port_str else DEFAULT_VESPA_LOCAL_PORT
 
     return {
         "app_package_name": None,
-        "schema_name": os.getenv("VESPA_SCHEMA"),
-        "embedding_model": os.getenv("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
+        "schema_name": None,
+        "embedding_model": DEFAULT_EMBEDDING_MODEL,
         "vespa_url": vespa_url,
         "vespa_port": vespa_port,
-        "llm_base_url": None,
+        "llm_base_url": DEFAULT_LLM_BASE_URL,
         "llm_model": None,
         "llm_api_key": None,
+        "config": None,
     }
 
 
@@ -198,29 +205,13 @@ def list_available_projects() -> List[str]:
 
 
 def load_project_settings(project_name: str) -> Dict[str, Any]:
-    """Load settings from a specific project's conf.yml."""
-    vespa_url = (os.getenv("VESPA_URL") or "").strip() or "http://localhost"
-    vespa_port = resolve_vespa_port(vespa_url)
-
+    """Load settings from a specific project's conf.yml. No environment variables are used."""
     config_path = Path("output") / project_name / "conf.yml"
     if not config_path.exists():
         raise FileNotFoundError(f"Project config not found: {config_path}")
 
     cfg = Config.from_yaml(str(config_path))
-    rag_params = cfg.rag_params or {}
-    llm_config = cfg.get_llm_config()
-
-    return {
-        "app_package_name": cfg.get_app_package_name(),
-        # Env vars override config file
-        "schema_name": os.getenv("VESPA_SCHEMA") or cfg.get_schema_name(),
-        "embedding_model": os.getenv("EMBEDDING_MODEL") or rag_params.get("embedding_model", DEFAULT_EMBEDDING_MODEL),
-        "vespa_url": vespa_url,
-        "vespa_port": vespa_port,
-        "llm_base_url": os.getenv("LLM_BASE_URL") or llm_config.get("llm_base_url"),
-        "llm_model": os.getenv("LLM_MODEL") or llm_config.get("llm_model"),
-        "llm_api_key": os.getenv("LLM_API_KEY") or llm_config.get("llm_api_key"),
-    }
+    return _load_settings_from_config(cfg)
 
 
 class CrawlManager:
@@ -258,6 +249,7 @@ class CrawlManager:
 
         self.process = await asyncio.create_subprocess_exec(
             sys.executable,
+            "-u",  # Unbuffered output
             "-m",
             "nyrag.cli",
             "process",
@@ -265,6 +257,7 @@ class CrawlManager:
             self.temp_config_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
         asyncio.create_task(self._read_logs())
 
@@ -343,14 +336,17 @@ class CrawlManager:
 crawl_manager = CrawlManager()
 
 active_project: Optional[str] = None
-settings = _load_settings()
+settings = _get_default_settings()
 logger = get_logger("api")
 app = FastAPI(title="nyrag API", version="0.1.0")
 model = SentenceTransformer(settings["embedding_model"])
 
 # Get mTLS credentials (with Vespa Cloud fallback)
-_cert, _key = _resolve_mtls_paths(settings["vespa_url"], settings.get("app_package_name"))
-_, _, _ca, _verify = get_vespa_tls_config()
+_config = settings.get("config")
+_cert, _key = _resolve_mtls_paths(_config, settings.get("app_package_name"))
+_ca, _verify = None, None
+if _config:
+    _, _, _ca, _verify = get_tls_config_from_deploy(_config.get_deploy_config())
 
 vespa_app = make_vespa_client(
     settings["vespa_url"],
@@ -479,14 +475,7 @@ async def list_example_configs() -> Dict[str, str]:
 
 @app.get("/config/mode")
 async def get_config_mode():
-    """Check if NYRAG_CONFIG env var is set."""
-    config_path = os.getenv("NYRAG_CONFIG")
-    if config_path and Path(config_path).exists():
-        return {
-            "mode": "env_config",
-            "config_path": config_path,
-            "allow_project_selection": False,
-        }
+    """Check configuration mode - always project selection since env vars are removed."""
     return {
         "mode": "project_selection",
         "config_path": None,
@@ -497,23 +486,12 @@ async def get_config_mode():
 @app.get("/projects")
 async def get_projects():
     """List available projects."""
-    config_path = os.getenv("NYRAG_CONFIG")
-    # If NYRAG_CONFIG is set, don't list projects
-    if config_path and Path(config_path).exists():
-        return []
     return list_available_projects()
 
 
 @app.post("/projects/select")
 async def select_project(project_name: str = Body(..., embed=True)):
     """Select a project and load its settings."""
-    # If NYRAG_CONFIG is set, don't allow project switching
-    if os.getenv("NYRAG_CONFIG"):
-        raise HTTPException(
-            status_code=403,
-            detail="Project selection disabled when NYRAG_CONFIG is set",
-        )
-
     global active_project, settings
     try:
         settings = load_project_settings(project_name)
@@ -686,9 +664,9 @@ def _get_llm_client() -> AsyncOpenAI:
         except Exception as e:
             logger.warning(f"Failed to reload settings for project {active_project}: {e}")
 
-    base_url = current_settings.get("llm_base_url") or os.getenv("LLM_BASE_URL") or "https://openrouter.ai/api/v1"
+    base_url = current_settings.get("llm_base_url") or DEFAULT_LLM_BASE_URL
 
-    api_key = current_settings.get("llm_api_key") or os.getenv("LLM_API_KEY")
+    api_key = current_settings.get("llm_api_key")
 
     # Debug logging
     logger.info(f"LLM client config - base_url: {base_url}")
@@ -699,15 +677,15 @@ def _get_llm_client() -> AsyncOpenAI:
     if not api_key:
         raise HTTPException(
             status_code=500,
-            detail="LLM API key not set. Set LLM_API_KEY environment variable, "
-            "or configure llm_api_key in config file. For local models, use any dummy value.",
+            detail="LLM API key not set. Configure llm_config.api_key in config file. "
+            "For local models, use any dummy value.",
         )
 
     return AsyncOpenAI(base_url=base_url, api_key=api_key)
 
 
 def _resolve_model_id(request_model: Optional[str]) -> str:
-    # Priority: request param > settings (which has env > config) > env fallback
+    # Priority: request param > settings from config
     # Reload settings from active project to ensure we have the latest config
     current_settings = settings
     if active_project:
@@ -716,15 +694,11 @@ def _resolve_model_id(request_model: Optional[str]) -> str:
         except Exception:
             pass
 
-    model_id = (
-        (request_model or "").strip()
-        or (current_settings.get("llm_model") or "").strip()
-        or (os.getenv("LLM_MODEL") or "").strip()
-    )
+    model_id = (request_model or "").strip() or (current_settings.get("llm_model") or "").strip()
     if not model_id:
         raise HTTPException(
             status_code=500,
-            detail="LLM model not set. Set LLM_MODEL env var, configure llm_config.model in the project config, "
+            detail="LLM model not set. Configure llm_config.model in the project config, "
             "or pass model in the request.",
         )
     return model_id

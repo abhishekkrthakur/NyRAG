@@ -1,60 +1,74 @@
 import inspect
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+from nyrag.defaults import (
+    DEFAULT_CLOUD_CERT_NAME,
+    DEFAULT_CLOUD_KEY_NAME,
+    DEFAULT_VESPA_LOCAL_PORT,
+    DEFAULT_VESPA_TLS_VERIFY,
+    DEFAULT_VESPA_URL,
+)
 
 
-DEFAULT_LOCAL_PORT = 8080
-DEFAULT_CLOUD_PORT = 443
-DEFAULT_CLOUD_CERT_NAME = "data-plane-public-cert.pem"
-DEFAULT_CLOUD_KEY_NAME = "data-plane-private-key.pem"
-DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-DEFAULT_EMBEDDING_DIM = 384
+if TYPE_CHECKING:
+    from nyrag.config import Config, DeployConfig
 
 
-def _truthy_env(value: str) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+def is_cloud_mode(deploy_config: Optional["DeployConfig"] = None) -> bool:
+    """Check if deployment mode is cloud based on config."""
+    if deploy_config is None:
+        return False
+    return deploy_config.is_cloud_mode()
 
 
-def is_vespa_cloud(vespa_url: str) -> bool:
-    local_env = os.getenv("NYRAG_LOCAL")
-    if local_env is not None:
-        return not _truthy_env(local_env)
-    return (vespa_url or "").strip().lower().startswith("https://")
+def get_vespa_url(config: Optional["Config"] = None) -> str:
+    """Get Vespa URL from config (which reads from env var) or return default."""
+    if config is None:
+        return os.getenv("VESPA_URL", DEFAULT_VESPA_URL)
+    return config.get_vespa_url()
 
 
-def resolve_vespa_port(vespa_url: str) -> int:
-    port_env = (os.getenv("VESPA_PORT") or "").strip()
-    if port_env:
-        return int(port_env)
-    return DEFAULT_CLOUD_PORT if is_vespa_cloud(vespa_url) else DEFAULT_LOCAL_PORT
+def get_vespa_port(config: Optional["Config"] = None) -> int:
+    """Get Vespa port from config (which reads from env var) or return default based on mode."""
+    if config is None:
+        port_str = os.getenv("VESPA_PORT")
+        if port_str:
+            return int(port_str)
+        return DEFAULT_VESPA_LOCAL_PORT
+    return config.get_vespa_port()
 
 
 def resolve_vespa_cloud_mtls_paths(project_folder: str) -> Tuple[Path, Path]:
+    """Resolve default mTLS paths for Vespa Cloud."""
     base_dir = Path.home() / ".vespa" / f"devrel-public.{project_folder}.default"
     return base_dir / DEFAULT_CLOUD_CERT_NAME, base_dir / DEFAULT_CLOUD_KEY_NAME
 
 
-def get_vespa_tls_config() -> Tuple[Optional[str], Optional[str], Optional[str], Optional[object]]:
-    """Get Vespa TLS configuration from environment variables.
+def get_tls_config_from_deploy(
+    deploy_config: Optional["DeployConfig"] = None,
+) -> Tuple[Optional[str], Optional[str], Optional[str], bool]:
+    """Get Vespa TLS configuration from deploy config (reads from env vars).
 
     Returns:
         Tuple of (cert_path, key_path, ca_cert, verify)
     """
-    cert_path = (os.getenv("VESPA_CLIENT_CERT") or "").strip() or None
-    key_path = (os.getenv("VESPA_CLIENT_KEY") or "").strip() or None
-    ca_cert = (os.getenv("VESPA_CA_CERT") or "").strip() or None
+    if deploy_config is None:
+        # Read directly from env vars
+        cert = os.getenv("VESPA_CLIENT_CERT")
+        key = os.getenv("VESPA_CLIENT_KEY")
+        ca = os.getenv("VESPA_CA_CERT")
+        verify_str = os.getenv("VESPA_TLS_VERIFY")
+        verify = verify_str.strip().lower() in ("1", "true", "yes") if verify_str else DEFAULT_VESPA_TLS_VERIFY
+        return cert, key, ca, verify
 
-    verify_env = (os.getenv("VESPA_TLS_VERIFY") or "").strip().lower()
-    verify: Optional[object]
-    if verify_env in {"0", "false", "no", "off"}:
-        verify = False
-    elif verify_env:
-        verify = verify_env
-    else:
-        verify = None
-
-    return cert_path, key_path, ca_cert, verify
+    return (
+        deploy_config.get_tls_client_cert(),
+        deploy_config.get_tls_client_key(),
+        deploy_config.get_tls_ca_cert(),
+        deploy_config.get_tls_verify(),
+    )
 
 
 def make_vespa_client(

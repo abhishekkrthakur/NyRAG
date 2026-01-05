@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from nyrag.config import Config, CrawlParams, DocParams
+from nyrag.config import Config, CrawlParams, DocParams, RAGParams
 
 
 class TestCrawlParams:
@@ -106,20 +106,19 @@ class TestConfig:
 
     def test_with_rag_params(self):
         """Test configuration with RAG parameters."""
-        rag_params = {
-            "embedding_model": "custom-model",
-            "chunk_size": 512,
-            "chunk_overlap": 50,
-        }
+        rag_params = RAGParams(
+            embedding_model="custom-model",
+            chunk_size=512,
+            chunk_overlap=50,
+        )
         config = Config(
             name="test",
             mode="web",
             start_loc="https://example.com",
             rag_params=rag_params,
         )
-        assert config.rag_params == rag_params
-        assert config.rag_params["embedding_model"] == "custom-model"
-        assert config.rag_params["chunk_size"] == 512
+        assert config.rag_params.embedding_model == "custom-model"
+        assert config.rag_params.chunk_size == 512
 
     def test_from_yaml(self):
         """Test loading configuration from YAML file."""
@@ -147,7 +146,7 @@ crawl_params:
             assert config.mode == "web"
             assert config.start_loc == "https://example.com"
             assert config.exclude == ["*/admin/*", "*/login"]
-            assert config.rag_params["embedding_model"] == "custom-model"
+            assert config.rag_params.embedding_model == "custom-model"
             assert config.crawl_params.respect_robots_txt is False
             assert config.crawl_params.user_agent_type == "firefox"
         finally:
@@ -169,11 +168,11 @@ crawl_params:
             name="test",
             mode="web",
             start_loc="https://example.com",
-            rag_params={
-                "embedding_dim": 512,
-                "chunk_size": 2048,
-                "distance_metric": "euclidean",
-            },
+            rag_params=RAGParams(
+                embedding_dim=512,
+                chunk_size=2048,
+                distance_metric="euclidean",
+            ),
         )
         schema_params = config.get_schema_params()
         assert schema_params["embedding_dim"] == 512
@@ -181,8 +180,10 @@ crawl_params:
         assert schema_params["distance_metric"] == "euclidean"
 
     def test_default_schema_params(self):
-        """Test default schema parameters when not specified."""
+        """Test default schema parameters when using defaults."""
         config = Config(name="test", mode="web", start_loc="https://example.com")
         schema_params = config.get_schema_params()
-        # When rag_params is None, get_schema_params returns empty dict
-        assert schema_params == {}
+        # Defaults are now filled in from RAGParams model
+        assert schema_params["embedding_dim"] == 384
+        assert schema_params["chunk_size"] == 1024
+        assert schema_params["distance_metric"] == "angular"

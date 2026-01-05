@@ -1,5 +1,4 @@
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -12,7 +11,6 @@ from nyrag.deploy import deploy_app_package
 from nyrag.feed import VespaFeeder
 from nyrag.logger import logger
 from nyrag.schema import VespaSchema
-from nyrag.utils import resolve_vespa_port
 
 
 def load_processed_locations(jsonl_file: Path) -> set:
@@ -140,17 +138,8 @@ def _create_schema(config: Config):
     app_package.to_files(str(app_path))
     logger.success(f"Schema saved to {app_path}")
 
-    deploy_enabled = os.getenv("NYRAG_VESPA_DEPLOY", "1").lower() not in (
-        "0",
-        "false",
-        "no",
-        "off",
-    )
-    if not deploy_enabled:
-        logger.warning("NYRAG_VESPA_DEPLOY disabled; skipping Vespa application deploy")
-        return
-
-    deployed = deploy_app_package(app_path, app_package=app_package)
+    deploy_config = config.get_deploy_config()
+    deployed = deploy_app_package(app_path, app_package=app_package, deploy_config=deploy_config)
     if not deployed:
         logger.error("Vespa deploy failed; aborting.")
         raise SystemExit(1)
@@ -191,8 +180,8 @@ def _process_web(config: Config, output_dir: Path, resume: bool = False):
 
     # Initialize Vespa feeder
     logger.info("Initializing Vespa feeder...")
-    vespa_url = (os.getenv("VESPA_URL") or "").strip() or "http://localhost"
-    vespa_port = resolve_vespa_port(vespa_url)
+    vespa_url = config.get_vespa_url()
+    vespa_port = config.get_vespa_port()
     feeder = VespaFeeder(config=config, redeploy=False, vespa_url=vespa_url, vespa_port=vespa_port)
     feeder_callback = feeder.feed
 
@@ -307,8 +296,8 @@ def _process_documents(config: Config, output_dir: Path, resume: bool = False):
 
     # Initialize Vespa feeder
     logger.info("Initializing Vespa feeder...")
-    vespa_url = (os.getenv("VESPA_URL") or "").strip() or "http://localhost"
-    vespa_port = resolve_vespa_port(vespa_url)
+    vespa_url = config.get_vespa_url()
+    vespa_port = config.get_vespa_port()
     feeder = VespaFeeder(config=config, redeploy=False, vespa_url=vespa_url, vespa_port=vespa_port)
 
     md = MarkItDown()
@@ -353,10 +342,13 @@ def _process_documents(config: Config, output_dir: Path, resume: bool = False):
                     )
                 except Exception as e:
                     logger.error(f"Failed to feed {doc_file.name} to Vespa: {e}")
+                    logger.error("Stopping document processing due to feeding error")
+                    raise
 
         except Exception as e:
             logger.error(f"Failed to process {doc_file}: {str(e)}")
             error_count += 1
+            raise
 
     logger.success(f"Document processing completed: {success_count} successful, {error_count} failed")
 

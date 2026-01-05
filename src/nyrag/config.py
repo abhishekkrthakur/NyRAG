@@ -1,8 +1,26 @@
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, field_validator
+
+from nyrag.defaults import (
+    DEFAULT_CHUNK_OVERLAP,
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_DEPLOY_MODE,
+    DEFAULT_DISTANCE_METRIC,
+    DEFAULT_EMBEDDING_DIM,
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_LLM_BASE_URL,
+    DEFAULT_LLM_MODEL,
+    DEFAULT_VESPA_CLOUD_INSTANCE,
+    DEFAULT_VESPA_CLOUD_PORT,
+    DEFAULT_VESPA_CONFIGSERVER_URL,
+    DEFAULT_VESPA_LOCAL_PORT,
+    DEFAULT_VESPA_TLS_VERIFY,
+    DEFAULT_VESPA_URL,
+)
 
 
 class CrawlParams(BaseModel):
@@ -30,19 +48,126 @@ class DocParams(BaseModel):
 class LLMConfig(BaseModel):
     """Configuration for LLM providers."""
 
-    base_url: Optional[str] = None
-    model: Optional[str] = None
+    base_url: str = DEFAULT_LLM_BASE_URL
+    model: str = DEFAULT_LLM_MODEL
     api_key: Optional[str] = None
 
 
+class DeployConfig(BaseModel):
+    """Configuration for deployment settings.
+
+    deploy_mode is set in the config file at top level.
+    All connection settings come from environment variables with defaults:
+
+    Local mode env vars:
+        VESPA_URL: Vespa endpoint URL (default: http://localhost)
+        VESPA_PORT: Vespa port (default: 8080)
+        VESPA_CONFIGSERVER_URL: Config server URL for compose deploy
+
+    Cloud mode env vars:
+        VESPA_CLOUD_TENANT: Vespa Cloud tenant (required)
+        VESPA_CLOUD_APPLICATION: Application name (optional, auto-generated)
+        VESPA_CLOUD_INSTANCE: Instance name (default: default)
+        VESPA_CLOUD_API_KEY_PATH: Path to API key file
+        VESPA_CLOUD_API_KEY: API key content (alternative to path)
+        VESPA_CLIENT_CERT: mTLS client certificate path
+        VESPA_CLIENT_KEY: mTLS client key path
+        VESPA_CA_CERT: CA certificate path
+        VESPA_TLS_VERIFY: TLS verification (default: 1)
+    """
+
+    deploy_mode: Literal["local", "cloud"] = DEFAULT_DEPLOY_MODE
+
+    def get_vespa_url(self) -> str:
+        """Get Vespa URL from env var or default."""
+        return os.getenv("VESPA_URL", DEFAULT_VESPA_URL)
+
+    def get_vespa_port(self) -> int:
+        """Get Vespa port from env var or default based on mode."""
+        port_str = os.getenv("VESPA_PORT")
+        if port_str:
+            return int(port_str)
+        return DEFAULT_VESPA_CLOUD_PORT if self.deploy_mode == "cloud" else DEFAULT_VESPA_LOCAL_PORT
+
+    def get_configserver_url(self) -> str:
+        """Get Vespa config server URL from env var or default."""
+        return os.getenv("VESPA_CONFIGSERVER_URL", DEFAULT_VESPA_CONFIGSERVER_URL)
+
+    def get_cloud_tenant(self) -> Optional[str]:
+        """Get Vespa Cloud tenant from env var."""
+        return os.getenv("VESPA_CLOUD_TENANT")
+
+    def get_cloud_application(self) -> Optional[str]:
+        """Get Vespa Cloud application from env var."""
+        return os.getenv("VESPA_CLOUD_APPLICATION")
+
+    def get_cloud_instance(self) -> str:
+        """Get Vespa Cloud instance from env var or default."""
+        return os.getenv("VESPA_CLOUD_INSTANCE", DEFAULT_VESPA_CLOUD_INSTANCE)
+
+    def get_cloud_api_key_path(self) -> Optional[str]:
+        """Get Vespa Cloud API key path from env var."""
+        return os.getenv("VESPA_CLOUD_API_KEY_PATH")
+
+    def get_cloud_api_key(self) -> Optional[str]:
+        """Get Vespa Cloud API key content from env var."""
+        return os.getenv("VESPA_CLOUD_API_KEY")
+
+    def get_tls_client_cert(self) -> Optional[str]:
+        """Get mTLS client certificate path from env var."""
+        return os.getenv("VESPA_CLIENT_CERT")
+
+    def get_tls_client_key(self) -> Optional[str]:
+        """Get mTLS client key path from env var."""
+        return os.getenv("VESPA_CLIENT_KEY")
+
+    def get_tls_ca_cert(self) -> Optional[str]:
+        """Get CA certificate path from env var."""
+        return os.getenv("VESPA_CA_CERT")
+
+    def get_tls_verify(self) -> bool:
+        """Get TLS verification setting from env var or default."""
+        verify_str = os.getenv("VESPA_TLS_VERIFY")
+        if verify_str is not None:
+            return verify_str.strip().lower() in ("1", "true", "yes")
+        return DEFAULT_VESPA_TLS_VERIFY
+
+    def is_cloud_mode(self) -> bool:
+        """Check if deployment mode is cloud."""
+        return self.deploy_mode == "cloud"
+
+    def is_local_mode(self) -> bool:
+        """Check if deployment mode is local (Docker)."""
+        return self.deploy_mode == "local"
+
+
+class RAGParams(BaseModel):
+    """Configuration for RAG parameters with defaults."""
+
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
+    embedding_dim: int = DEFAULT_EMBEDDING_DIM
+    chunk_size: int = DEFAULT_CHUNK_SIZE
+    chunk_overlap: int = DEFAULT_CHUNK_OVERLAP
+    distance_metric: str = DEFAULT_DISTANCE_METRIC
+    max_tokens: Optional[int] = None
+
+
 class Config(BaseModel):
-    """Configuration model for nyrag."""
+    """Configuration model for nyrag.
+
+    deploy_mode controls deployment target:
+    - "local": Deploy to local Docker (default)
+    - "cloud": Deploy to Vespa Cloud
+
+    Connection settings come from environment variables.
+    """
 
     name: str
     mode: Literal["web", "docs"]
     start_loc: str
+    deploy_mode: Literal["local", "cloud"] = DEFAULT_DEPLOY_MODE
     exclude: Optional[List[str]] = None
-    rag_params: Optional[Dict[str, Any]] = None
+    rag_params: Optional[RAGParams] = None
     crawl_params: Optional[CrawlParams] = None
     doc_params: Optional[DocParams] = None
     llm_config: Optional[LLMConfig] = None
@@ -61,6 +186,10 @@ class Config(BaseModel):
             self.crawl_params = CrawlParams()
         if self.doc_params is None:
             self.doc_params = DocParams()
+        if self.rag_params is None:
+            self.rag_params = RAGParams()
+        if self.llm_config is None:
+            self.llm_config = LLMConfig()
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> "Config":
@@ -96,11 +225,15 @@ class Config(BaseModel):
     def get_schema_params(self) -> Dict[str, Any]:
         """Get schema parameters from rag_params."""
         if self.rag_params is None:
-            return {}
+            return {
+                "embedding_dim": DEFAULT_EMBEDDING_DIM,
+                "chunk_size": DEFAULT_CHUNK_SIZE,
+                "distance_metric": DEFAULT_DISTANCE_METRIC,
+            }
         return {
-            "embedding_dim": self.rag_params.get("embedding_dim", 384),
-            "chunk_size": self.rag_params.get("chunk_size", 1024),
-            "distance_metric": self.rag_params.get("distance_metric", "angular"),
+            "embedding_dim": self.rag_params.embedding_dim,
+            "chunk_size": self.rag_params.chunk_size,
+            "distance_metric": self.rag_params.distance_metric,
         }
 
     def get_llm_config(self) -> Dict[str, Any]:
@@ -113,10 +246,36 @@ class Config(BaseModel):
             }
 
         return {
-            "llm_base_url": None,
-            "llm_model": None,
+            "llm_base_url": DEFAULT_LLM_BASE_URL,
+            "llm_model": DEFAULT_LLM_MODEL,
             "llm_api_key": None,
         }
+
+    def get_deploy_config(self) -> DeployConfig:
+        """Get deployment configuration."""
+        return DeployConfig(deploy_mode=self.deploy_mode)
+
+    def get_vespa_url(self) -> str:
+        """Get Vespa URL from deploy config (reads from env var)."""
+        return self.get_deploy_config().get_vespa_url()
+
+    def get_vespa_port(self) -> int:
+        """Get Vespa port from deploy config (reads from env var)."""
+        return self.get_deploy_config().get_vespa_port()
+
+    def is_cloud_mode(self) -> bool:
+        """Check if deployment mode is cloud."""
+        return self.deploy_mode == "cloud"
+
+    def is_local_deploy_mode(self) -> bool:
+        """Check if deployment mode is local (Docker)."""
+        return self.deploy_mode == "local"
+
+    def get_embedding_model(self) -> str:
+        """Get embedding model from rag_params."""
+        if self.rag_params is None:
+            return DEFAULT_EMBEDDING_MODEL
+        return self.rag_params.embedding_model
 
     def is_web_mode(self) -> bool:
         """Check if config is for web crawling."""
@@ -137,6 +296,11 @@ def get_config_options(mode: str = "web") -> Dict[str, Any]:
         "name": {"type": "string", "label": "name"},
         "mode": {"type": "select", "label": "mode", "options": ["web", "docs"]},
         "start_loc": {"type": "string", "label": "start_loc"},
+        "deploy_mode": {
+            "type": "select",
+            "label": "deploy_mode",
+            "options": ["local", "cloud"],
+        },
         "exclude": {"type": "list", "label": "exclude"},
     }
 

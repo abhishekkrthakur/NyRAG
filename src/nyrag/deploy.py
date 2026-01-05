@@ -1,15 +1,18 @@
-import os
 import sys
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from vespa.package import ApplicationPackage
 
+from nyrag.defaults import DEFAULT_VESPA_DOCKER_IMAGE
 from nyrag.logger import console, logger
-from nyrag.utils import _truthy_env
 from nyrag.vespa_docker import resolve_vespa_docker_class
+
+
+if TYPE_CHECKING:
+    from nyrag.config import DeployConfig
 
 
 _CLUSTER_REMOVAL_ALLOWLIST_TOKEN = "content-cluster-removal"
@@ -38,19 +41,11 @@ def _confirm_cluster_removal(message: str, *, until: date) -> bool:
     Return True if it's OK to deploy with `content-cluster-removal` override.
 
     Behavior:
-    - If `NYRAG_VESPA_ALLOW_CONTENT_CLUSTER_REMOVAL` is truthy: auto-allow.
     - If stdin isn't interactive: auto-deny.
     - Otherwise, ask the user.
     """
-    if _truthy_env(os.getenv("NYRAG_VESPA_ALLOW_CONTENT_CLUSTER_REMOVAL", "")):
-        logger.warning("NYRAG_VESPA_ALLOW_CONTENT_CLUSTER_REMOVAL=1 set; proceeding with content cluster removal.")
-        return True
-
     if not sys.stdin.isatty():
-        logger.warning(
-            "Vespa deploy requires 'content-cluster-removal' override, but stdin is not interactive. "
-            "Set NYRAG_VESPA_ALLOW_CONTENT_CLUSTER_REMOVAL=1 to proceed."
-        )
+        logger.warning("Vespa deploy requires 'content-cluster-removal' override, but stdin is not interactive.")
         return False
 
     console.print(
@@ -116,6 +111,13 @@ def _deploy_with_pyvespa(deployer: Any, *, application_package: ApplicationPacka
 
 
 def _set_vespa_endpoint_env_from_app(vespa_app: Any) -> None:
+    """Extract and return endpoint info from a deployed Vespa app.
+
+    Note: This no longer sets environment variables. It's kept for compatibility
+    but the returned values should be used directly.
+    """
+    import os
+
     def _as_path_str(value: Any) -> Optional[str]:
         if value is None:
             return None
@@ -127,53 +129,41 @@ def _set_vespa_endpoint_env_from_app(vespa_app: Any) -> None:
             return value
         return None
 
+    # Extract but don't set env vars - values are used directly from config now
     url = getattr(vespa_app, "url", None)
     port = getattr(vespa_app, "port", None)
-    if isinstance(url, str):
-        os.environ["VESPA_URL"] = url.rstrip("/")
-        if isinstance(port, int):
-            os.environ["VESPA_PORT"] = str(port)
-        else:
-            default_port = "443" if url.strip().lower().startswith("https://") else "8080"
-            os.environ.setdefault("VESPA_PORT", default_port)
-
-    # Best-effort: carry over mTLS material from pyvespa if present.
     cert = _as_path_str(getattr(vespa_app, "cert", None))
-    key = _as_path_str(getattr(vespa_app, "key", None))
-    ca_cert = _as_path_str(getattr(vespa_app, "ca_cert", None))
 
-    if cert and cert.strip():
-        os.environ.setdefault("VESPA_CLIENT_CERT", cert.strip())
-    if key and key.strip():
-        os.environ.setdefault("VESPA_CLIENT_KEY", key.strip())
-    if ca_cert and ca_cert.strip():
-        os.environ.setdefault("VESPA_CA_CERT", ca_cert.strip())
+    # Log the extracted values for debugging
+    if isinstance(url, str):
+        logger.debug(f"Vespa endpoint: {url}:{port}")
+    if cert:
+        logger.debug(f"mTLS cert: {cert}")
 
 
 def deploy_app_package(
     app_dir: Optional[Path],
     *,
     app_package: ApplicationPackage,
+    deploy_config: Optional["DeployConfig"] = None,
 ) -> bool:
     """
     Deploy the application package using pyvespa deployments.
 
-    Deployment selection:
-    - If `NYRAG_LOCAL` is set:
-      - truthy => start local Vespa via `VespaDocker`
-      - falsy  => deploy to `VespaCloud`
-    - If `NYRAG_LOCAL` is not set:
-      - if `VESPA_CLOUD_TENANT` or `VESPA_CLOUD_APPLICATION` is set => `VespaCloud`
-      - else => `VespaDocker`
+    Deployment mode is determined by deploy_config.deploy_mode:
+    - "local" => start local Vespa via `VespaDocker`
+    - "cloud" => deploy to `VespaCloud`
+
+    Connection settings come from environment variables:
+    - VESPA_URL, VESPA_PORT, VESPA_CONFIGSERVER_URL (for local)
+    - VESPA_CLOUD_* env vars (for cloud)
     """
-    local_env = os.getenv("NYRAG_LOCAL")
-    if local_env is not None:
-        mode = "docker" if _truthy_env(local_env) else "cloud"
-    else:
-        has_cloud_hints = bool(
-            (os.getenv("VESPA_CLOUD_TENANT") or "").strip() or (os.getenv("VESPA_CLOUD_APPLICATION") or "").strip()
-        )
-        mode = "cloud" if has_cloud_hints else "docker"
+    from nyrag.config import DeployConfig
+
+    if deploy_config is None:
+        deploy_config = DeployConfig()
+
+    mode = "docker" if deploy_config.is_local_mode() else "cloud"
 
     attempted_override = False
     while True:
@@ -188,20 +178,25 @@ def deploy_app_package(
             if mode == "docker":
                 VespaDocker = resolve_vespa_docker_class()
 
-                image = os.getenv("NYRAG_VESPA_DOCKER_IMAGE", "vespaengine/vespa:latest")
                 if VespaDocker.__name__ == "ComposeVespaDocker":
                     logger.info("Deploying with ComposeVespaDocker")
+                    cfgsrv_url = deploy_config.get_configserver_url()
+                    logger.info(f"Deploying via compose config server at {cfgsrv_url}")
                 else:
-                    logger.info(f"Deploying with VespaDocker (image={image})")
+                    logger.info(f"Deploying with VespaDocker (image={DEFAULT_VESPA_DOCKER_IMAGE})")
 
                 import inspect
 
                 init_sig = inspect.signature(VespaDocker)
                 init_kwargs = {}
                 if "image" in init_sig.parameters:
-                    init_kwargs["image"] = image
+                    init_kwargs["image"] = DEFAULT_VESPA_DOCKER_IMAGE
                 elif "docker_image" in init_sig.parameters:
-                    init_kwargs["docker_image"] = image
+                    init_kwargs["docker_image"] = DEFAULT_VESPA_DOCKER_IMAGE
+
+                # Pass config server URL for compose deployer
+                if "cfgsrv_url" in init_sig.parameters:
+                    init_kwargs["cfgsrv_url"] = deploy_config.get_configserver_url()
 
                 # Some pyvespa versions want the application package/root on the deployer instance.
                 if "application_package" in init_sig.parameters:
@@ -223,14 +218,14 @@ def deploy_app_package(
             if mode == "cloud":
                 from vespa.deployment import VespaCloud  # type: ignore
 
-                tenant = (os.getenv("VESPA_CLOUD_TENANT") or "").strip()
-                application_env = (os.getenv("VESPA_CLOUD_APPLICATION") or "").strip()
-                application = application_env or app_package.name
-                instance = (os.getenv("VESPA_CLOUD_INSTANCE") or "").strip() or "default"
+                tenant = deploy_config.get_cloud_tenant()
                 if not tenant:
-                    raise RuntimeError("Missing Vespa Cloud env var: VESPA_CLOUD_TENANT")
+                    raise RuntimeError("Missing env var: VESPA_CLOUD_TENANT")
 
-                if not application_env:
+                application = deploy_config.get_cloud_application() or app_package.name
+                instance = deploy_config.get_cloud_instance()
+
+                if not deploy_config.get_cloud_application():
                     logger.info(f"VESPA_CLOUD_APPLICATION not set; using generated app name '{application}'")
                 logger.info(f"Deploying to Vespa Cloud: {tenant}/{application}/{instance}")
 
@@ -252,8 +247,8 @@ def deploy_app_package(
                 if "application_root" in init_sig.parameters:
                     init_kwargs["application_root"] = str(effective_app_dir)
 
-                api_key_path = (os.getenv("VESPA_CLOUD_API_KEY_PATH") or "").strip() or None
-                api_key = (os.getenv("VESPA_CLOUD_API_KEY") or "").strip() or None
+                api_key_path = deploy_config.get_cloud_api_key_path()
+                api_key = deploy_config.get_cloud_api_key()
                 if api_key_path and "api_key_path" in init_sig.parameters:
                     init_kwargs["api_key_path"] = api_key_path
                 if api_key and "api_key" in init_sig.parameters:

@@ -6,81 +6,85 @@ from unittest.mock import patch
 
 import pytest
 
-from nyrag.utils import (
-    DEFAULT_CLOUD_PORT,
+from nyrag.config import Config, DeployConfig
+from nyrag.defaults import (
     DEFAULT_EMBEDDING_DIM,
     DEFAULT_EMBEDDING_MODEL,
-    DEFAULT_LOCAL_PORT,
+    DEFAULT_VESPA_CLOUD_PORT,
+    DEFAULT_VESPA_LOCAL_PORT,
+    DEFAULT_VESPA_TLS_VERIFY,
+)
+from nyrag.utils import (
     chunks,
-    get_vespa_tls_config,
-    is_vespa_cloud,
+    get_tls_config_from_deploy,
+    get_vespa_port,
+    is_cloud_mode,
     resolve_vespa_cloud_mtls_paths,
-    resolve_vespa_port,
 )
 
 
-class TestIsVespaCloud:
-    """Tests for is_vespa_cloud function."""
+class TestIsCloudMode:
+    """Tests for is_cloud_mode function."""
 
-    def test_https_url_is_cloud(self):
-        """Test that HTTPS URLs are detected as cloud."""
-        assert is_vespa_cloud("https://example.vespa-app.cloud") is True
+    def test_cloud_mode(self):
+        """Test that cloud mode is detected correctly."""
+        deploy_config = DeployConfig(deploy_mode="cloud")
+        assert is_cloud_mode(deploy_config) is True
 
-    def test_http_url_is_not_cloud(self):
-        """Test that HTTP URLs are not detected as cloud."""
-        assert is_vespa_cloud("http://localhost") is False
+    def test_local_mode(self):
+        """Test that local mode is detected correctly."""
+        deploy_config = DeployConfig(deploy_mode="local")
+        assert is_cloud_mode(deploy_config) is False
 
-    def test_local_url_is_not_cloud(self):
-        """Test that local URLs are not detected as cloud."""
-        assert is_vespa_cloud("http://localhost:8080") is False
-
-    @patch.dict(os.environ, {"NYRAG_LOCAL": "1"})
-    def test_nyrag_local_env_override(self):
-        """Test that NYRAG_LOCAL=1 forces local mode."""
-        assert is_vespa_cloud("https://example.vespa-app.cloud") is False
-
-    @patch.dict(os.environ, {"NYRAG_LOCAL": "true"})
-    def test_nyrag_local_env_true(self):
-        """Test that NYRAG_LOCAL=true forces local mode."""
-        assert is_vespa_cloud("https://example.vespa-app.cloud") is False
-
-    @patch.dict(os.environ, {"NYRAG_LOCAL": "0"})
-    def test_nyrag_local_env_false(self):
-        """Test that NYRAG_LOCAL=0 allows cloud detection."""
-        assert is_vespa_cloud("https://example.vespa-app.cloud") is True
-
-    @patch.dict(os.environ, {}, clear=True)
-    def test_empty_url(self):
-        """Test that empty URL defaults to local."""
-        assert is_vespa_cloud("") is False
+    def test_none_deploy_config(self):
+        """Test that None deploy config defaults to False."""
+        assert is_cloud_mode(None) is False
 
 
-class TestResolveVespaPort:
-    """Tests for resolve_vespa_port function."""
+class TestGetVespaPort:
+    """Tests for get_vespa_port function."""
 
-    @patch.dict(os.environ, {}, clear=True)
-    def test_cloud_url_default_port(self):
-        """Test that cloud URLs use default cloud port."""
-        port = resolve_vespa_port("https://example.vespa-app.cloud")
-        assert port == DEFAULT_CLOUD_PORT
+    def test_cloud_mode_default_port(self):
+        """Test that cloud mode uses default cloud port."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = Config(
+                name="test",
+                mode="docs",
+                start_loc="/test",
+                deploy_mode="cloud",
+            )
+            port = get_vespa_port(config)
+            assert port == DEFAULT_VESPA_CLOUD_PORT
 
-    @patch.dict(os.environ, {}, clear=True)
-    def test_local_url_default_port(self):
-        """Test that local URLs use default local port."""
-        port = resolve_vespa_port("http://localhost")
-        assert port == DEFAULT_LOCAL_PORT
+    def test_local_mode_default_port(self):
+        """Test that local mode uses default local port."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = Config(
+                name="test",
+                mode="docs",
+                start_loc="/test",
+                deploy_mode="local",
+            )
+            port = get_vespa_port(config)
+            assert port == DEFAULT_VESPA_LOCAL_PORT
 
-    @patch.dict(os.environ, {"VESPA_PORT": "9090"})
-    def test_env_port_override(self):
-        """Test that VESPA_PORT env var overrides defaults."""
-        port = resolve_vespa_port("http://localhost")
-        assert port == 9090
+    def test_explicit_port_override(self):
+        """Test that explicit port env var overrides defaults."""
+        with patch.dict(os.environ, {"VESPA_PORT": "9090"}):
+            config = Config(
+                name="test",
+                mode="docs",
+                start_loc="/test",
+                deploy_mode="local",
+            )
+            port = get_vespa_port(config)
+            assert port == 9090
 
-    @patch.dict(os.environ, {"VESPA_PORT": "9090"})
-    def test_env_port_override_for_cloud(self):
-        """Test that VESPA_PORT env var overrides cloud default."""
-        port = resolve_vespa_port("https://example.vespa-app.cloud")
-        assert port == 9090
+    def test_none_config_default_port(self):
+        """Test that None config returns default local port."""
+        with patch.dict(os.environ, {}, clear=True):
+            port = get_vespa_port(None)
+            assert port == DEFAULT_VESPA_LOCAL_PORT
 
 
 class TestResolveVespaCloudMtlsPaths:
@@ -94,50 +98,47 @@ class TestResolveVespaCloudMtlsPaths:
         assert key_path == expected_base / "data-plane-private-key.pem"
 
 
-class TestGetVespaTlsConfig:
-    """Tests for get_vespa_tls_config function."""
+class TestGetTlsConfigFromDeploy:
+    """Tests for get_tls_config_from_deploy function."""
 
-    @patch.dict(os.environ, {}, clear=True)
-    def test_no_env_vars(self):
-        """Test with no environment variables set."""
-        cert, key, ca, verify = get_vespa_tls_config()
-        assert cert is None
-        assert key is None
-        assert ca is None
-        assert verify is None
+    def test_no_deploy_config(self):
+        """Test with no deploy config (reads from env vars)."""
+        with patch.dict(os.environ, {}, clear=True):
+            cert, key, ca, verify = get_tls_config_from_deploy(None)
+            assert cert is None
+            assert key is None
+            assert ca is None
+            assert verify == DEFAULT_VESPA_TLS_VERIFY
 
-    @patch.dict(
-        os.environ,
-        {
-            "VESPA_CLIENT_CERT": "/path/to/cert.pem",
-            "VESPA_CLIENT_KEY": "/path/to/key.pem",
-        },
-    )
-    def test_with_cert_and_key(self):
-        """Test with cert and key environment variables."""
-        cert, key, ca, verify = get_vespa_tls_config()
-        assert cert == "/path/to/cert.pem"
-        assert key == "/path/to/key.pem"
-        assert ca is None
-        assert verify is None
+    def test_with_tls_config(self):
+        """Test with TLS config from env vars."""
+        with patch.dict(
+            os.environ,
+            {
+                "VESPA_CLIENT_CERT": "/path/to/cert.pem",
+                "VESPA_CLIENT_KEY": "/path/to/key.pem",
+            },
+        ):
+            deploy_config = DeployConfig(deploy_mode="local")
+            cert, key, ca, verify = get_tls_config_from_deploy(deploy_config)
+            assert cert == "/path/to/cert.pem"
+            assert key == "/path/to/key.pem"
+            assert ca is None
+            assert verify == DEFAULT_VESPA_TLS_VERIFY
 
-    @patch.dict(os.environ, {"VESPA_CA_CERT": "/path/to/ca.pem"})
     def test_with_ca_cert(self):
-        """Test with CA cert environment variable."""
-        cert, key, ca, verify = get_vespa_tls_config()
-        assert ca == "/path/to/ca.pem"
+        """Test with CA cert from env var."""
+        with patch.dict(os.environ, {"VESPA_CA_CERT": "/path/to/ca.pem"}, clear=True):
+            deploy_config = DeployConfig(deploy_mode="local")
+            cert, key, ca, verify = get_tls_config_from_deploy(deploy_config)
+            assert ca == "/path/to/ca.pem"
 
-    @patch.dict(os.environ, {"VESPA_TLS_VERIFY": "false"})
     def test_verify_false(self):
-        """Test with VESPA_TLS_VERIFY=false."""
-        cert, key, ca, verify = get_vespa_tls_config()
-        assert verify is False
-
-    @patch.dict(os.environ, {"VESPA_TLS_VERIFY": "/path/to/ca-bundle.crt"})
-    def test_verify_custom_path(self):
-        """Test with custom CA bundle path."""
-        cert, key, ca, verify = get_vespa_tls_config()
-        assert verify == "/path/to/ca-bundle.crt"
+        """Test with verify=false from env var."""
+        with patch.dict(os.environ, {"VESPA_TLS_VERIFY": "0"}, clear=True):
+            deploy_config = DeployConfig(deploy_mode="local")
+            cert, key, ca, verify = get_tls_config_from_deploy(deploy_config)
+            assert verify is False
 
 
 class TestChunks:
@@ -204,5 +205,5 @@ class TestConstants:
 
     def test_default_ports(self):
         """Test default port constants."""
-        assert DEFAULT_LOCAL_PORT == 8080
-        assert DEFAULT_CLOUD_PORT == 443
+        assert DEFAULT_VESPA_LOCAL_PORT == 8080
+        assert DEFAULT_VESPA_CLOUD_PORT == 443

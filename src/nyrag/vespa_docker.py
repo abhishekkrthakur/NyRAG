@@ -11,23 +11,26 @@ import httpx
 from vespa.application import Vespa
 from vespa.package import ApplicationPackage
 
+from nyrag.defaults import DEFAULT_VESPA_LOCAL_PORT
 from nyrag.logger import logger
-from nyrag.utils import _truthy_env
 
 
 _DEFAULT_CONFIGSERVER_URL = "http://localhost:19071"
-_DEFAULT_VESPA_PORT = 8080
+_DEFAULT_VESPA_PORT = DEFAULT_VESPA_LOCAL_PORT
 
 
-def _use_compose_deployer() -> bool:
-    mode = (os.getenv("NYRAG_VESPA_DOCKER_MODE") or "").strip().lower()
-    if mode:
-        return mode in {"compose", "external"}
-    return _truthy_env(os.getenv("NYRAG_VESPA_COMPOSE", ""))
+def _use_compose_deployer(deploy_config=None) -> bool:
+    """Check if compose deployer should be used.
+
+    Only uses compose deployer when NYRAG_VESPA_COMPOSE=1 is set.
+    This is for running inside a docker-compose setup alongside Vespa.
+    """
+    return os.getenv("NYRAG_VESPA_COMPOSE", "").strip() == "1"
 
 
-def resolve_vespa_docker_class():
-    if _use_compose_deployer():
+def resolve_vespa_docker_class(deploy_config=None):
+    """Resolve which Docker deployer class to use."""
+    if _use_compose_deployer(deploy_config):
         return ComposeVespaDocker
     from vespa.deployment import VespaDocker  # type: ignore
 
@@ -54,10 +57,7 @@ class ComposeVespaDocker:
         self.app_package = application_package
         self.package = application_package
         self.application_root = application_root
-        self.cfgsrv_url = (
-            (cfgsrv_url or os.getenv("VESPA_CONFIGSERVER_URL") or os.getenv("NYRAG_VESPA_CONFIGSERVER_URL"))
-            or _DEFAULT_CONFIGSERVER_URL
-        ).rstrip("/")
+        self.cfgsrv_url = (cfgsrv_url or _DEFAULT_CONFIGSERVER_URL).rstrip("/")
         self.url = _resolve_vespa_url(vespa_url, self.cfgsrv_url)
         self.port = _resolve_vespa_port(vespa_port)
 
@@ -110,9 +110,9 @@ class ComposeVespaDocker:
 
 
 def _resolve_vespa_url(vespa_url: Optional[str], cfgsrv_url: str) -> str:
-    env_url = (vespa_url or os.getenv("VESPA_URL") or "").strip()
-    if env_url:
-        return env_url.rstrip("/")
+    """Resolve Vespa URL from parameter or infer from config server URL."""
+    if vespa_url:
+        return vespa_url.strip().rstrip("/")
     parsed = urlparse(cfgsrv_url)
     scheme = parsed.scheme or "http"
     host = parsed.hostname or "localhost"
@@ -120,11 +120,9 @@ def _resolve_vespa_url(vespa_url: Optional[str], cfgsrv_url: str) -> str:
 
 
 def _resolve_vespa_port(vespa_port: Optional[int]) -> int:
+    """Resolve Vespa port from parameter or use default."""
     if vespa_port is not None:
         return int(vespa_port)
-    port_env = (os.getenv("VESPA_PORT") or "").strip()
-    if port_env:
-        return int(port_env)
     return _DEFAULT_VESPA_PORT
 
 

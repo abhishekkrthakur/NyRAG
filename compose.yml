@@ -5,8 +5,10 @@ services:
     ports:
       - "8080:8080"
       - "19071:19071"
+    volumes:
+      - vespa_data:/opt/vespa/var
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:19071/ApplicationStatus"]
+      test: [ "CMD", "curl", "-f", "http://localhost:19071/ApplicationStatus" ]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -16,19 +18,19 @@ services:
       context: .
     ports:
       - "8000:8000"
-    env_file:
-      - .env
     environment:
-      NYRAG_CONFIG: /app/configs/example.yml
       NYRAG_VESPA_COMPOSE: "1"
-      NYRAG_VESPA_DOCKER_MODE: compose
       VESPA_URL: http://vespa
       VESPA_PORT: "8080"
       VESPA_CONFIGSERVER_URL: http://vespa:19071
-      NYRAG_VESPA_CONFIGSERVER_URL: http://vespa:19071
+      HF_HOME: /app/.cache/huggingface
     volumes:
-      - ./configs:/app/configs:ro
       - ./output:/app/output
+      - hf_cache:/app/.cache/huggingface
     depends_on:
       vespa:
         condition: service_healthy
+
+volumes:
+  vespa_data:
+  hf_cache:

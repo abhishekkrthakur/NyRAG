@@ -5,14 +5,11 @@ from sentence_transformers import SentenceTransformer
 from vespa.io import VespaResponse
 
 from nyrag.config import Config
+from nyrag.defaults import DEFAULT_EMBEDDING_MODEL, DEFAULT_VESPA_LOCAL_PORT, DEFAULT_VESPA_URL
 from nyrag.deploy import deploy_app_package
 from nyrag.logger import logger
 from nyrag.schema import VespaSchema
-from nyrag.utils import DEFAULT_EMBEDDING_MODEL, chunks, get_vespa_tls_config, make_vespa_client
-
-
-DEFAULT_HOST = "http://localhost"
-DEFAULT_PORT = 8080
+from nyrag.utils import chunks, get_tls_config_from_deploy, make_vespa_client
 
 
 class VespaFeeder:
@@ -22,21 +19,21 @@ class VespaFeeder:
         self,
         config: Config,
         redeploy: bool = False,
-        vespa_url: str = DEFAULT_HOST,
-        vespa_port: int = DEFAULT_PORT,
+        vespa_url: str = DEFAULT_VESPA_URL,
+        vespa_port: int = DEFAULT_VESPA_LOCAL_PORT,
     ):
         self.config = config
         self.schema_name = config.get_schema_name()
         self.app_package_name = config.get_app_package_name()
 
-        rag_params = config.rag_params or {}
+        rag_params = config.rag_params
         schema_params = config.get_schema_params()
 
-        self.embedding_model_name = rag_params.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
+        self.embedding_model_name = rag_params.embedding_model if rag_params else DEFAULT_EMBEDDING_MODEL
         self.embedding_dim = schema_params.get("embedding_dim", 384)
-        self.chunk_size = rag_params.get("chunk_size", schema_params.get("chunk_size", 1024))
-        self.chunk_overlap = rag_params.get("chunk_overlap", 0)
-        self.embedding_batch_size = rag_params.get("embedding_batch_size")
+        self.chunk_size = rag_params.chunk_size if rag_params else schema_params.get("chunk_size", 1024)
+        self.chunk_overlap = rag_params.chunk_overlap if rag_params else 0
+        self.embedding_batch_size = None  # Future enhancement
 
         logger.info(f"Using model '{self.embedding_model_name}' " f"(dim={self.embedding_dim})")
         self.model = SentenceTransformer(self.embedding_model_name)
@@ -63,7 +60,7 @@ class VespaFeeder:
             if "401" in msg and "Unauthorized" in msg:
                 logger.error(
                     "Vespa feed returned 401 Unauthorized. "
-                    "For Vespa Cloud, set VESPA_CLIENT_CERT and VESPA_CLIENT_KEY (mTLS) before feeding."
+                    "For Vespa Cloud, set deploy.tls.client_cert and deploy.tls.client_key (mTLS) in config."
                 )
             logger.error(f"Feed request failed for id={prepared['id']}: {e}")
             return False
@@ -82,7 +79,8 @@ class VespaFeeder:
         vespa_port: int,
         schema_params: Dict[str, Any],
     ):
-        cert_path, key_path, ca_cert, verify = get_vespa_tls_config()
+        deploy_config = self.config.get_deploy_config()
+        cert_path, key_path, ca_cert, verify = get_tls_config_from_deploy(deploy_config)
 
         if redeploy:
             logger.info("Redeploying Vespa application before feeding")
@@ -92,7 +90,7 @@ class VespaFeeder:
                 **schema_params,
             )
             app_package = vespa_schema.get_package()
-            deploy_app_package(None, app_package=app_package)
+            deploy_app_package(None, app_package=app_package, deploy_config=deploy_config)
 
         logger.info(f"Connecting to Vespa at {vespa_url}:{vespa_port}")
         return make_vespa_client(vespa_url, vespa_port, cert_path, key_path, ca_cert, verify)
