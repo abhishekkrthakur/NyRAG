@@ -148,12 +148,17 @@ Open http://localhost:8000/chat
 ## Cloud Mode
 
 Deploys to Vespa Cloud for production use.
+If you've authenticated with the Vespa CLI and set a target (e.g. `vespa auth login` + `vespa target set`),
+NyRAG will read tenant/app/instance, API key, endpoint, and mTLS paths from the CLI config.
+Env vars still take precedence when set.
+For no-env setups, set `cloud_tenant` in your config; NyRAG will attempt to set the CLI target automatically.
+For deploy auth, you can use `VESPA_TEAM_API_KEY` instead of the older `VESPA_CLOUD_API_KEY`.
 
 ### Web Crawling (Cloud)
 
 ```bash
 export NYRAG_LOCAL=0
-export VESPA_CLOUD_TENANT=your-tenant
+export VESPA_CLOUD_TENANT=your-tenant  # optional if cloud_tenant is set in config or Vespa CLI target is set
 
 nyrag process --config configs/example.yml
 ```
@@ -162,7 +167,7 @@ nyrag process --config configs/example.yml
 
 ```bash
 export NYRAG_LOCAL=0
-export VESPA_CLOUD_TENANT=your-tenant
+export VESPA_CLOUD_TENANT=your-tenant  # optional if cloud_tenant is set in config or Vespa CLI target is set
 
 nyrag process --config configs/doc_example.yml
 ```
@@ -173,7 +178,7 @@ After crawling/processing is complete:
 
 ```bash
 export NYRAG_CONFIG=configs/example.yml
-export VESPA_URL="https://<your-endpoint>.z.vespa-app.cloud"
+export VESPA_URL="https://<your-endpoint>.z.vespa-app.cloud"  # optional if config/CLI provides endpoint
 export LLM_API_KEY=your-api-key
 export LLM_MODEL=openai/gpt-5.1
 
@@ -185,6 +190,19 @@ Open http://localhost:8000/chat
 ---
 
 ## Configuration Reference
+
+### Cloud Deploy Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cloud_tenant` | str | `None` | Vespa Cloud tenant (required for cloud mode if no env/CLI target) |
+
+### Connection Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `vespa_url` | str | `None` | Vespa endpoint URL (auto-filled into `conf.yml` after deploy) |
+| `vespa_port` | int | `None` | Vespa endpoint port (auto-filled into `conf.yml` after deploy) |
 
 ### Web Mode Parameters (`crawl_params`)
 
@@ -242,26 +260,27 @@ Open http://localhost:8000/chat
 
 | Variable | Description |
 |----------|-------------|
-| `VESPA_CLOUD_TENANT` | Your Vespa Cloud tenant |
-| `VESPA_CLOUD_APPLICATION` | Application name (optional) |
-| `VESPA_CLOUD_INSTANCE` | Instance name (default: `default`) |
-| `VESPA_CLOUD_API_KEY_PATH` | Path to API key file |
-| `VESPA_CLIENT_CERT` | Path to mTLS certificate |
-| `VESPA_CLIENT_KEY` | Path to mTLS private key |
+| `VESPA_TEAM_API_KEY` | Vespa Team API key (preferred for cloud deploys) |
+| `VESPA_CLOUD_TENANT` | Your Vespa Cloud tenant (optional if `cloud_tenant` is set in config or Vespa CLI target is set) |
+| `VESPA_CLOUD_APPLICATION` | Application name (optional, CLI fallback supported) |
+| `VESPA_CLOUD_INSTANCE` | Instance name (default: `default`, CLI fallback supported) |
+| `VESPA_CLOUD_API_KEY_PATH` | Path to API key file (CLI fallback supported) |
+| `VESPA_CLIENT_CERT` | Path to mTLS certificate (CLI fallback supported) |
+| `VESPA_CLIENT_KEY` | Path to mTLS private key (CLI fallback supported) |
 
 ### Chat UI
 
 | Variable | Description |
 |----------|-------------|
 | `NYRAG_CONFIG` | Path to config file |
-| `VESPA_URL` | Vespa endpoint URL (optional for local, required for cloud) |
+| `VESPA_URL` | Vespa endpoint URL (optional for local, optional for cloud with config/CLI) |
 | `VESPA_SCHEMA` | Override schema name from config |
 | `EMBEDDING_MODEL` | Override embedding model from config |
 | `LLM_BASE_URL` | LLM API base URL (OpenAI-compatible API) |
 | `LLM_MODEL` | LLM model name |
 | `LLM_API_KEY` | LLM API key |
 
-**Configuration Priority:** Environment variables always take precedence over config file values. When both are set, env vars override the config file.
+**Configuration Priority:** Environment variables always take precedence over config file values. Vespa CLI config is used as a fallback for cloud settings when env vars are not set.
 
 ---
 
