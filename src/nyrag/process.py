@@ -1,13 +1,15 @@
 import json
+import os
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from markitdown import MarkItDown, StreamInfo
 
 from nyrag.config import Config
 from nyrag.crawly import crawl_web
-from nyrag.deploy import deploy_app_package
+from nyrag.defaults import DEFAULT_VESPA_LOCAL_PORT
+from nyrag.deploy import DeployResult, deploy_app_package
 from nyrag.feed import VespaFeeder
 from nyrag.logger import logger
 from nyrag.schema import VespaSchema
@@ -79,7 +81,7 @@ def save_to_jsonl(
     logger.debug(f"Saved to {file_path}")
 
 
-def process_from_config(config: Config, resume: bool = False):
+def process_from_config(config: Config, resume: bool = False, config_path: Optional[str] = None):
     """
     Process based on configuration file.
 
@@ -103,7 +105,10 @@ def process_from_config(config: Config, resume: bool = False):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Step 1: Create and save Vespa schema
-    _create_schema(config)
+    deploy_result = _create_schema(config)
+
+    # Persist endpoint info into output conf.yml
+    _persist_config_with_endpoint(config, output_dir, config_path, deploy_result)
 
     # Step 2: Process data based on mode
     if config.is_web_mode():
@@ -114,12 +119,15 @@ def process_from_config(config: Config, resume: bool = False):
         raise ValueError(f"Unknown mode: {config.mode}")
 
 
-def _create_schema(config: Config):
+def _create_schema(config: Config) -> DeployResult:
     """
-    Create and save Vespa schema.
+    Create and save Vespa schema, then deploy.
 
     Args:
         config: Configuration object
+        
+    Returns:
+        DeployResult with endpoint information from deployment.
     """
     logger.info("Creating Vespa schema...")
 
@@ -139,10 +147,62 @@ def _create_schema(config: Config):
     logger.success(f"Schema saved to {app_path}")
 
     deploy_config = config.get_deploy_config()
-    deployed = deploy_app_package(app_path, app_package=app_package, deploy_config=deploy_config)
-    if not deployed:
+    deploy_result = deploy_app_package(app_path, app_package=app_package, deploy_config=deploy_config)
+    if not deploy_result.success:
         logger.error("Vespa deploy failed; aborting.")
         raise SystemExit(1)
+    
+    return deploy_result
+
+
+def _persist_config_with_endpoint(
+    config: Config, 
+    output_dir: Path, 
+    config_path: Optional[str],
+    deploy_result: Optional[DeployResult] = None,
+) -> None:
+    """Persist config to output conf.yml with resolved Vespa endpoint info.
+    
+    Uses deploy_result if available (from VespaCloud.get_mtls_endpoint() etc),
+    otherwise falls back to config methods.
+    """
+    import yaml
+
+    conf_path = output_dir / "conf.yml"
+    data: dict
+    if config_path and Path(config_path).exists():
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    else:
+        data = config.model_dump(exclude_none=True)
+
+    # Prefer deploy_result endpoints (from VespaCloud API) over constructed URLs
+    if deploy_result and deploy_result.vespa_url:
+        data["vespa_url"] = deploy_result.vespa_url.rstrip("/")
+        data["vespa_port"] = deploy_result.vespa_port or 443
+        
+        # Store additional cloud endpoint info for reference
+        if deploy_result.mtls_endpoint:
+            data["vespa_mtls_endpoint"] = deploy_result.mtls_endpoint
+        if deploy_result.token_endpoint:
+            data["vespa_token_endpoint"] = deploy_result.token_endpoint
+    else:
+        # Fallback to config methods
+        vespa_url = config.get_vespa_url()
+        vespa_port = config.get_vespa_port()
+        data["vespa_url"] = vespa_url
+        data["vespa_port"] = vespa_port
+
+        if config.is_local_deploy_mode():
+            if "VESPA_URL" not in os.environ and not config.vespa_url:
+                data["vespa_url"] = "http://localhost"
+            if "VESPA_PORT" not in os.environ and config.vespa_port is None:
+                data["vespa_port"] = DEFAULT_VESPA_LOCAL_PORT
+
+    with open(conf_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+
+    logger.info(f"Config saved to {conf_path}")
 
 
 def _process_web(config: Config, output_dir: Path, resume: bool = False):

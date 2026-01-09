@@ -18,7 +18,8 @@ from sentence_transformers import SentenceTransformer
 from nyrag.config import Config, get_config_options, get_example_configs
 from nyrag.defaults import DEFAULT_EMBEDDING_MODEL, DEFAULT_LLM_BASE_URL, DEFAULT_VESPA_LOCAL_PORT, DEFAULT_VESPA_URL
 from nyrag.logger import get_logger
-from nyrag.utils import get_tls_config_from_deploy, make_vespa_client, resolve_vespa_cloud_mtls_paths
+from nyrag.utils import get_cloud_secret_token, get_tls_config_from_deploy, make_vespa_client, resolve_vespa_cloud_mtls_paths
+from nyrag.vespa_cli import is_vespa_cloud_authenticated
 
 
 DEFAULT_ENDPOINT = "http://localhost:8080"
@@ -118,37 +119,57 @@ class CrawlRequest(BaseModel):
 
 def _resolve_mtls_paths(
     config: Optional[Config], project_folder: Optional[str]
-) -> Tuple[Optional[str], Optional[str]]:
-    """Resolve mTLS paths from config or default locations."""
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Resolve mTLS paths and cloud token from config or default locations.
+    
+    Returns:
+        Tuple of (cert_path, key_path, cloud_token)
+    """
     deploy_config = config.get_deploy_config() if config else None
+    
+    # For cloud mode, prefer token-based auth
+    if deploy_config and deploy_config.is_cloud_mode():
+        cloud_token = get_cloud_secret_token(deploy_config)
+        if cloud_token:
+            return None, None, cloud_token
 
-    # Check TLS config first
-    if deploy_config and deploy_config.tls:
-        tls = deploy_config.tls
-        if tls.client_cert or tls.client_key:
-            if not (tls.client_cert and tls.client_key):
+    # Check TLS config (env vars or Vespa CLI fallback)
+    if deploy_config:
+        cert, key, _, _ = get_tls_config_from_deploy(deploy_config)
+        if cert or key:
+            if not (cert and key):
                 raise RuntimeError("Vespa Cloud requires both tls.client_cert and tls.client_key.")
-            return tls.client_cert, tls.client_key
+            return cert, key, None
 
     # If not cloud mode, no mTLS needed
     if not deploy_config or not deploy_config.is_cloud_mode():
-        return None, None
+        return None, None, None
 
     # Try default locations for cloud mode
     if not project_folder:
         raise RuntimeError(
-            "Vespa Cloud mTLS credentials not found. "
-            "Set deploy.tls.client_cert and deploy.tls.client_key in config."
+            "Vespa Cloud credentials not found. "
+            "Set VESPA_CLOUD_SECRET_TOKEN for token auth, "
+            "or VESPA_CLIENT_CERT/VESPA_CLIENT_KEY for mTLS auth."
         )
 
-    cert_path, key_path = resolve_vespa_cloud_mtls_paths(project_folder)
+    tenant = deploy_config.get_cloud_tenant()
+    application = deploy_config.get_cloud_application()
+    instance = deploy_config.get_cloud_instance()
+    cert_path, key_path = resolve_vespa_cloud_mtls_paths(
+        project_folder,
+        tenant=tenant,
+        application=application,
+        instance=instance,
+    )
     if cert_path.exists() and key_path.exists():
-        return str(cert_path), str(key_path)
+        return str(cert_path), str(key_path), None
 
     raise RuntimeError(
-        "Vespa Cloud mTLS credentials not found at "
+        "Vespa Cloud credentials not found at "
         f"{cert_path} and {key_path}. "
-        "Set deploy.tls.client_cert and deploy.tls.client_key in config."
+        "Set VESPA_CLOUD_SECRET_TOKEN for token auth, "
+        "or VESPA_CLIENT_CERT/VESPA_CLIENT_KEY for mTLS auth."
     )
 
 
@@ -341,21 +362,28 @@ logger = get_logger("api")
 app = FastAPI(title="nyrag API", version="0.1.0")
 model = SentenceTransformer(settings["embedding_model"])
 
-# Get mTLS credentials (with Vespa Cloud fallback)
-_config = settings.get("config")
-_cert, _key = _resolve_mtls_paths(_config, settings.get("app_package_name"))
-_ca, _verify = None, None
-if _config:
-    _, _, _ca, _verify = get_tls_config_from_deploy(_config.get_deploy_config())
 
-vespa_app = make_vespa_client(
-    settings["vespa_url"],
-    settings["vespa_port"],
-    _cert,
-    _key,
-    _ca,
-    _verify,
-)
+def _create_vespa_client(current_settings: Dict[str, Any]) -> Any:
+    """Create or recreate the Vespa client with given settings."""
+    config = current_settings.get("config")
+    cert, key, cloud_token = _resolve_mtls_paths(config, current_settings.get("app_package_name"))
+    ca, verify = None, None
+    if config:
+        _, _, ca, verify = get_tls_config_from_deploy(config.get_deploy_config())
+    
+    return make_vespa_client(
+        current_settings["vespa_url"],
+        current_settings["vespa_port"],
+        cert,
+        key,
+        ca,
+        verify,
+        vespa_cloud_secret_token=cloud_token,
+    )
+
+
+# Initial Vespa client creation
+vespa_app = _create_vespa_client(settings)
 
 base_dir = Path(__file__).parent
 templates = Jinja2Templates(directory=str(base_dir / "templates"))
@@ -395,6 +423,20 @@ async def stats() -> Dict[str, Any]:
     """Return simple corpus statistics from Vespa (documents and chunks)."""
     doc_count: Optional[int] = None
     chunk_count: Optional[int] = None
+    
+    # Determine deploy mode and auth status
+    deploy_mode = "local"
+    is_authenticated = True  # Local mode doesn't need auth
+    
+    _cfg = settings.get("config")
+    if _cfg:
+        deploy_mode = _cfg.deploy_mode
+        if deploy_mode == "cloud":
+            # Check if we have valid cloud credentials
+            is_authenticated = is_vespa_cloud_authenticated()
+    elif os.getenv("NYRAG_CLOUD_MODE") == "1":
+        deploy_mode = "cloud"
+        is_authenticated = is_vespa_cloud_authenticated()
 
     try:
         res = vespa_app.query(
@@ -428,6 +470,9 @@ async def stats() -> Dict[str, Any]:
         "schema": settings["schema_name"],
         "documents": doc_count,
         "chunks": chunk_count,
+        "deploy_mode": deploy_mode,
+        "is_authenticated": is_authenticated,
+        "has_data": doc_count is not None and doc_count > 0,
     }
 
 
@@ -492,10 +537,13 @@ async def get_projects():
 @app.post("/projects/select")
 async def select_project(project_name: str = Body(..., embed=True)):
     """Select a project and load its settings."""
-    global active_project, settings
+    global active_project, settings, vespa_app
     try:
         settings = load_project_settings(project_name)
         active_project = project_name
+        # Recreate vespa_app with the new project's settings
+        vespa_app = _create_vespa_client(settings)
+        logger.info(f"Vespa client reconnected to {settings['vespa_url']}:{settings['vespa_port']}")
         return {"status": "success", "settings": settings}
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))

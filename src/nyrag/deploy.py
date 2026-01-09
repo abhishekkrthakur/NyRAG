@@ -1,5 +1,6 @@
 import sys
 import tempfile
+from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -13,6 +14,18 @@ from nyrag.vespa_docker import resolve_vespa_docker_class
 
 if TYPE_CHECKING:
     from nyrag.config import DeployConfig
+
+
+@dataclass
+class DeployResult:
+    """Result from a Vespa deployment with endpoint information."""
+    success: bool
+    vespa_url: Optional[str] = None
+    vespa_port: Optional[int] = None
+    mtls_endpoint: Optional[str] = None
+    token_endpoint: Optional[str] = None
+    cert_path: Optional[str] = None
+    key_path: Optional[str] = None
 
 
 _CLUSTER_REMOVAL_ALLOWLIST_TOKEN = "content-cluster-removal"
@@ -111,11 +124,7 @@ def _deploy_with_pyvespa(deployer: Any, *, application_package: ApplicationPacka
 
 
 def _set_vespa_endpoint_env_from_app(vespa_app: Any) -> None:
-    """Extract and return endpoint info from a deployed Vespa app.
-
-    Note: This no longer sets environment variables. It's kept for compatibility
-    but the returned values should be used directly.
-    """
+    """Extract endpoint info from a deployed Vespa app and set env vars if missing."""
     import os
 
     def _as_path_str(value: Any) -> Optional[str]:
@@ -129,16 +138,40 @@ def _set_vespa_endpoint_env_from_app(vespa_app: Any) -> None:
             return value
         return None
 
-    # Extract but don't set env vars - values are used directly from config now
     url = getattr(vespa_app, "url", None)
     port = getattr(vespa_app, "port", None)
     cert = _as_path_str(getattr(vespa_app, "cert", None))
+    key = _as_path_str(getattr(vespa_app, "key", None))
+
+    if isinstance(url, str):
+        url = url.rstrip("/")
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(url)
+            if parsed.scheme and parsed.hostname:
+                url = f"{parsed.scheme}://{parsed.hostname}"
+                if parsed.port and not os.getenv("VESPA_PORT"):
+                    os.environ["VESPA_PORT"] = str(parsed.port)
+        except Exception:
+            pass
+
+    if url and not os.getenv("VESPA_URL"):
+        os.environ["VESPA_URL"] = url
+    if port and not os.getenv("VESPA_PORT"):
+        os.environ["VESPA_PORT"] = str(port)
+    if cert and not os.getenv("VESPA_CLIENT_CERT"):
+        os.environ["VESPA_CLIENT_CERT"] = cert
+    if key and not os.getenv("VESPA_CLIENT_KEY"):
+        os.environ["VESPA_CLIENT_KEY"] = key
 
     # Log the extracted values for debugging
     if isinstance(url, str):
         logger.debug(f"Vespa endpoint: {url}:{port}")
     if cert:
         logger.debug(f"mTLS cert: {cert}")
+    if key:
+        logger.debug("mTLS key: (set)")
 
 
 def deploy_app_package(
@@ -146,7 +179,7 @@ def deploy_app_package(
     *,
     app_package: ApplicationPackage,
     deploy_config: Optional["DeployConfig"] = None,
-) -> bool:
+) -> DeployResult:
     """
     Deploy the application package using pyvespa deployments.
 
@@ -157,6 +190,9 @@ def deploy_app_package(
     Connection settings come from environment variables:
     - VESPA_URL, VESPA_PORT, VESPA_CONFIGSERVER_URL (for local)
     - VESPA_CLOUD_* env vars (for cloud)
+    
+    Returns:
+        DeployResult with endpoint information for persistence.
     """
     from nyrag.config import DeployConfig
 
@@ -213,14 +249,25 @@ def deploy_app_package(
                 )
                 _set_vespa_endpoint_env_from_app(vespa_app)
                 logger.success("VespaDocker deploy succeeded")
-                return True
+                
+                # Extract endpoint info for result
+                url = getattr(vespa_app, "url", None)
+                port = getattr(vespa_app, "port", 8080)
+                return DeployResult(
+                    success=True,
+                    vespa_url=url,
+                    vespa_port=port,
+                )
 
             if mode == "cloud":
                 from vespa.deployment import VespaCloud  # type: ignore
 
                 tenant = deploy_config.get_cloud_tenant()
                 if not tenant:
-                    raise RuntimeError("Missing env var: VESPA_CLOUD_TENANT")
+                    raise RuntimeError(
+                        "Missing Vespa Cloud tenant. "
+                        "Set cloud_tenant in config, VESPA_CLOUD_TENANT, or select a Vespa CLI target."
+                    )
 
                 application = deploy_config.get_cloud_application() or app_package.name
                 instance = deploy_config.get_cloud_instance()
@@ -228,6 +275,14 @@ def deploy_app_package(
                 if not deploy_config.get_cloud_application():
                     logger.info(f"VESPA_CLOUD_APPLICATION not set; using generated app name '{application}'")
                 logger.info(f"Deploying to Vespa Cloud: {tenant}/{application}/{instance}")
+
+                from nyrag.vespa_cli import ensure_vespa_cli_target
+
+                if deploy_config.cloud_tenant:
+                    if ensure_vespa_cli_target(tenant, application, instance):
+                        logger.info(f"Vespa CLI target set to {tenant}.{application}.{instance}")
+                    else:
+                        logger.debug("Skipping Vespa CLI target set (CLI not found or command failed)")
 
                 import inspect
 
@@ -261,9 +316,56 @@ def deploy_app_package(
                     application_package=app_package,
                     application_root=effective_app_dir,
                 )
+                
+                # Get endpoints directly from VespaCloud object (more reliable than parsing logs)
+                mtls_endpoint = None
+                token_endpoint = None
+                try:
+                    if hasattr(cloud, 'get_mtls_endpoint'):
+                        mtls_endpoint = cloud.get_mtls_endpoint()
+                        if mtls_endpoint:
+                            logger.info(f"mTLS endpoint: {mtls_endpoint}")
+                except Exception as e:
+                    logger.debug(f"Could not get mTLS endpoint: {e}")
+                
+                try:
+                    if hasattr(cloud, 'get_token_endpoint'):
+                        token_endpoint = cloud.get_token_endpoint(instance=instance)
+                        if token_endpoint:
+                            logger.info(f"Token endpoint: {token_endpoint}")
+                except Exception as e:
+                    logger.debug(f"Could not get token endpoint: {e}")
+                
+                # Determine the best endpoint URL
+                endpoint_url = mtls_endpoint or token_endpoint
+                
+                # Set environment variables from endpoints
+                import os
+                if endpoint_url and not os.getenv("VESPA_URL"):
+                    os.environ["VESPA_URL"] = endpoint_url.rstrip("/")
+                    os.environ["VESPA_PORT"] = "443"
+                
+                # Also extract from vespa_app as fallback
                 _set_vespa_endpoint_env_from_app(vespa_app)
+                
+                # Get cert/key paths from vespa_app
+                cert_path = None
+                key_path = None
+                if hasattr(vespa_app, 'cert'):
+                    cert_path = getattr(vespa_app, 'cert', None)
+                if hasattr(vespa_app, 'key'):
+                    key_path = getattr(vespa_app, 'key', None)
+                
                 logger.success("Vespa Cloud deploy succeeded")
-                return True
+                return DeployResult(
+                    success=True,
+                    vespa_url=endpoint_url,
+                    vespa_port=443,
+                    mtls_endpoint=mtls_endpoint,
+                    token_endpoint=token_endpoint,
+                    cert_path=cert_path,
+                    key_path=key_path,
+                )
 
             raise ValueError(f"Unknown Vespa deploy mode: {mode!r}")
         except Exception as e:
@@ -275,7 +377,7 @@ def deploy_app_package(
                         "Skipping Vespa deploy to avoid content cluster removal; "
                         "feeding/query may fail until the app is deployed."
                     )
-                    return False
+                    return DeployResult(success=False)
 
                 # Write overrides into the on-disk app package and retry.
                 target_dir = Path(app_dir) if app_dir is not None else None

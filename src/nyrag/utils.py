@@ -23,6 +23,33 @@ def is_cloud_mode(deploy_config: Optional["DeployConfig"] = None) -> bool:
     return deploy_config.is_cloud_mode()
 
 
+def get_cloud_secret_token(deploy_config: Optional["DeployConfig"] = None) -> Optional[str]:
+    """Get Vespa Cloud secret token for data-plane authentication.
+    
+    Priority:
+    1. Environment variable VESPA_CLOUD_SECRET_TOKEN
+    2. DeployConfig settings
+    3. Vespa CLI config
+    
+    Returns:
+        The secret token if found, None otherwise.
+    """
+    # First check environment variable
+    token = os.getenv("VESPA_CLOUD_SECRET_TOKEN")
+    if token:
+        return token
+    
+    # Check deploy config
+    if deploy_config:
+        token = deploy_config.get_cloud_secret_token()
+        if token:
+            return token
+    
+    # Fallback to CLI config
+    from nyrag.vespa_cli import get_vespa_cloud_secret_token
+    return get_vespa_cloud_secret_token()
+
+
 def get_vespa_url(config: Optional["Config"] = None) -> str:
     """Get Vespa URL from config (which reads from env var) or return default."""
     if config is None:
@@ -40,9 +67,17 @@ def get_vespa_port(config: Optional["Config"] = None) -> int:
     return config.get_vespa_port()
 
 
-def resolve_vespa_cloud_mtls_paths(project_folder: str) -> Tuple[Path, Path]:
+def resolve_vespa_cloud_mtls_paths(
+    project_folder: str,
+    tenant: Optional[str] = None,
+    application: Optional[str] = None,
+    instance: Optional[str] = None,
+) -> Tuple[Path, Path]:
     """Resolve default mTLS paths for Vespa Cloud."""
-    base_dir = Path.home() / ".vespa" / f"devrel-public.{project_folder}.default"
+    if tenant and application and instance:
+        base_dir = Path.home() / ".vespa" / f"{tenant}.{application}.{instance}"
+    else:
+        base_dir = Path.home() / ".vespa" / f"devrel-public.{project_folder}.default"
     return base_dir / DEFAULT_CLOUD_CERT_NAME, base_dir / DEFAULT_CLOUD_KEY_NAME
 
 
@@ -63,12 +98,27 @@ def get_tls_config_from_deploy(
         verify = verify_str.strip().lower() in ("1", "true", "yes") if verify_str else DEFAULT_VESPA_TLS_VERIFY
         return cert, key, ca, verify
 
-    return (
-        deploy_config.get_tls_client_cert(),
-        deploy_config.get_tls_client_key(),
-        deploy_config.get_tls_ca_cert(),
-        deploy_config.get_tls_verify(),
-    )
+    cert = deploy_config.get_tls_client_cert()
+    key = deploy_config.get_tls_client_key()
+    ca = deploy_config.get_tls_ca_cert()
+    verify = deploy_config.get_tls_verify()
+
+    if deploy_config.is_cloud_mode() and not (cert and key):
+        tenant = deploy_config.get_cloud_tenant()
+        application = deploy_config.get_cloud_application()
+        instance = deploy_config.get_cloud_instance()
+        if tenant and application and instance:
+            cert_path, key_path = resolve_vespa_cloud_mtls_paths(
+                application,
+                tenant=tenant,
+                application=application,
+                instance=instance,
+            )
+            if cert_path.exists() and key_path.exists():
+                cert = str(cert_path)
+                key = str(key_path)
+
+    return cert, key, ca, verify
 
 
 def make_vespa_client(
@@ -78,6 +128,7 @@ def make_vespa_client(
     key_path: Optional[str] = None,
     ca_cert: Optional[str] = None,
     verify: Optional[object] = None,
+    vespa_cloud_secret_token: Optional[str] = None,
 ) -> Any:
     """Create a Vespa client with proper configuration for different pyvespa versions.
 
@@ -88,6 +139,7 @@ def make_vespa_client(
         key_path: Path to client key (optional)
         ca_cert: Path to CA certificate (optional)
         verify: TLS verification setting (optional)
+        vespa_cloud_secret_token: Token for Vespa Cloud data-plane auth (optional)
 
     Returns:
         Configured Vespa client instance
@@ -107,7 +159,11 @@ def make_vespa_client(
         kwargs["url"] = vespa_url
         kwargs["port"] = vespa_port
 
-    if cert_path and key_path and sig and "cert" in sig.parameters:
+    # Prefer token-based auth for cloud (simpler, no cert files needed)
+    if vespa_cloud_secret_token and sig and "vespa_cloud_secret_token" in sig.parameters:
+        kwargs["vespa_cloud_secret_token"] = vespa_cloud_secret_token
+    elif cert_path and key_path and sig and "cert" in sig.parameters:
+        # Fallback to mTLS if no token but certs available
         if "key" in sig.parameters:
             kwargs["cert"] = cert_path
             kwargs["key"] = key_path

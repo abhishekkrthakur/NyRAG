@@ -2,30 +2,57 @@ const chatEl = document.getElementById("chat");
 const inputEl = document.getElementById("input");
 const sendBtn = document.getElementById("send");
 const statsEl = document.getElementById("corpus-stats");
+const composerArea = document.getElementById("composer-area");
+const feedPanel = document.getElementById("feed-panel");
+const welcomeMessage = document.getElementById("welcome-message");
+const noDataMessage = document.getElementById("no-data-message");
+const noDataTitle = document.getElementById("no-data-title");
+const noDataDescription = document.getElementById("no-data-description");
+const deployModeBadge = document.getElementById("deploy-mode-badge");
+const loadingSpinner = document.getElementById("loading-spinner");
+
+// Header action buttons
+const configUpload = document.getElementById("config-upload");
+const createNewBtn = document.getElementById("create-new-btn");
+
+// Switch to feed button in no-data message
+const switchToFeedBtn = document.getElementById("switch-to-feed-btn");
+
+// Loading state helpers
+function showLoading() {
+  if (loadingSpinner) loadingSpinner.style.display = "flex";
+  if (statsEl) statsEl.textContent = "Loading...";
+}
+
+function hideLoading() {
+  if (loadingSpinner) loadingSpinner.style.display = "none";
+}
 
 // Settings Modal
 const settingsBtn = document.getElementById("settings-btn");
 const modal = document.getElementById("settings-modal");
-const closeBtn = modal.querySelector(".close-btn");
+const closeBtn = modal?.querySelector(".close-btn");
 const saveBtn = document.getElementById("save-settings");
 
-settingsBtn.onclick = () => modal.style.display = "block";
-closeBtn.onclick = () => modal.style.display = "none";
-saveBtn.onclick = async () => {
-  await saveUserSettings();
-  modal.style.display = "none";
-};
+if (settingsBtn && modal) {
+  settingsBtn.onclick = () => modal.style.display = "block";
+}
+if (closeBtn && modal) {
+  closeBtn.onclick = () => modal.style.display = "none";
+}
+if (saveBtn && modal) {
+  saveBtn.onclick = async () => {
+    await saveUserSettings();
+    modal.style.display = "none";
+  };
+}
 
-// Crawl Modal
-const crawlBtn = document.getElementById("crawl-btn");
-const crawlModal = document.getElementById("crawl-modal");
-const closeCrawlBtn = crawlModal.querySelector(".close-crawl-btn");
+// Feed Panel elements
 const crawlActionBtn = document.getElementById("crawl-action-btn");
 const terminalLogs = document.getElementById("terminal-logs");
 const terminalStatus = document.getElementById("terminal-status");
 const yamlContainer = document.getElementById("interactive-yaml-container");
 const exampleSelect = document.getElementById("example-select");
-const projectSelector = document.getElementById("project-selector");
 
 // Track current event source for stopping
 let currentEventSource = null;
@@ -34,6 +61,72 @@ let currentEventSource = null;
 let currentConfig = {};
 let configOptions = {}; // Schema loaded from API
 let exampleConfigs = {}; // Example configs from API
+let currentMode = "chat"; // "chat" or "feed"
+let hasData = false; // Whether corpus has data
+let deployMode = "local"; // "local" or "cloud"
+let activeProjectName = null; // Currently selected project
+
+// Mode Toggle Logic
+function setMode(mode) {
+  currentMode = mode;
+  
+  // Show/hide appropriate panels
+  if (mode === "chat") {
+    if (chatEl) chatEl.style.display = "flex";
+    if (feedPanel) feedPanel.style.display = "none";
+    if (composerArea) composerArea.style.display = "flex";
+    
+    // Show welcome or no-data message based on data availability
+    if (hasData) {
+      if (welcomeMessage) welcomeMessage.style.display = "block";
+      if (noDataMessage) noDataMessage.style.display = "none";
+    } else {
+      // Project selected but no data - show error
+      if (welcomeMessage) welcomeMessage.style.display = "none";
+      if (noDataMessage) {
+        noDataMessage.style.display = "flex";
+        if (noDataTitle) noDataTitle.textContent = "No data available";
+        if (noDataDescription) noDataDescription.textContent = `Project "${activeProjectName}" has no indexed documents. Feed data to start chatting.`;
+        if (switchToFeedBtn) {
+          switchToFeedBtn.textContent = "Feed Data to This Project";
+          switchToFeedBtn.style.display = "inline-block";
+        }
+      }
+    }
+  } else {
+    if (chatEl) chatEl.style.display = "none";
+    if (feedPanel) feedPanel.style.display = "flex";
+    if (composerArea) composerArea.style.display = "none";
+    
+    // Load feed panel content - only load project config if we have an active project
+    (async () => {
+      if (activeProjectName) {
+        await loadProjectConfig();
+      }
+      await loadExamples();
+      checkCrawlStatus();
+    })();
+  }
+}
+
+// Switch to feed from no-data message
+if (switchToFeedBtn) {
+  switchToFeedBtn.onclick = () => setMode("feed");
+}
+
+// Switch to feed from no-data message
+if (switchToFeedBtn) {
+  switchToFeedBtn.onclick = () => setMode("feed");
+}
+
+// Update deploy mode badge
+function updateDeployModeBadge(mode) {
+  deployMode = mode;
+  if (deployModeBadge) {
+    deployModeBadge.textContent = mode;
+    deployModeBadge.className = "deploy-mode-badge " + mode;
+  }
+}
 
 // Fallback Default if file is empty
 const FALLBACK_CONFIG = {
@@ -99,6 +192,25 @@ function renderConfigEditor() {
     line.appendChild(keySpan);
 
     // Value Control
+    if (key === 'deploy_mode') {
+      // Force match server deploy mode
+      if (deployMode) {
+        value = deployMode;
+        parentObj[key] = deployMode;
+      }
+      
+      const span = document.createElement('span');
+      span.className = 'yaml-value-readonly';
+      span.textContent = value;
+      span.title = "Determined by server start mode";
+      span.style.color = "var(--text-secondary)";
+      span.style.fontStyle = "italic";
+      line.appendChild(span);
+      
+      yamlContainer.appendChild(line);
+      return;
+    }
+
     if (schemaItem.type === 'nested') {
       yamlContainer.appendChild(line);
 
@@ -272,7 +384,8 @@ async function loadSchema(mode) {
 
 async function loadProjectConfig() {
   try {
-    const projectName = projectSelector.value;
+    // Use activeProjectName or fall back to selector value
+    const projectName = activeProjectName || (projectSelector ? projectSelector.value : "");
     const url = projectName
       ? `/config?project_name=${encodeURIComponent(projectName)}`
       : "/config";
@@ -313,6 +426,7 @@ async function saveProjectConfig() {
 
 // Load and populate example configs
 async function loadExamples() {
+  if (!exampleSelect) return;
   try {
     const res = await fetch("/config/examples");
     exampleConfigs = await res.json();
@@ -326,11 +440,17 @@ async function loadExamples() {
       exampleSelect.appendChild(opt);
     });
 
-    // Auto-select "web" template if available
-    if (exampleConfigs["web"]) {
+    // Auto-select "web" template if available and no config loaded yet
+    const isFallback =
+      !currentConfig ||
+      !currentConfig.name ||
+      (currentConfig.name === "new-project" &&
+        currentConfig.start_loc === "https://example.com");
+
+    if (exampleConfigs["web"] && isFallback) {
       exampleSelect.value = "web";
       // Trigger the onchange event
-      exampleSelect.dispatchEvent(new Event('change'));
+      exampleSelect.dispatchEvent(new Event("change"));
     }
   } catch (e) {
     console.error("Failed to load templates", e);
@@ -338,37 +458,33 @@ async function loadExamples() {
 }
 
 // Handle example selection
-exampleSelect.onchange = async () => {
-  const name = exampleSelect.value;
-  if (!name || !exampleConfigs[name]) return;
+if (exampleSelect) {
+  exampleSelect.onchange = async () => {
+    const name = exampleSelect.value;
+    if (!name || !exampleConfigs[name]) return;
 
-  try {
-    const parsed = jsyaml.load(exampleConfigs[name]);
-    // Merge: start with defaults, then override with example values
-    currentConfig = deepMerge(JSON.parse(JSON.stringify(FALLBACK_CONFIG)), parsed);
+    try {
+      const parsed = jsyaml.load(exampleConfigs[name]);
+      // Merge: start with defaults, then override with example values
+      currentConfig = deepMerge(JSON.parse(JSON.stringify(FALLBACK_CONFIG)), parsed);
 
-    const mode = currentConfig.mode || "web";
-    await loadSchema(mode);
-    renderConfigEditor();
+      const mode = currentConfig.mode || "web";
+      await loadSchema(mode);
+      renderConfigEditor();
 
-    terminalStatus.textContent = `Loaded: ${name}`;
-    terminalStatus.style.color = "#10b981";
-  } catch (e) {
-    console.error("Failed to parse example", e);
-  }
-};
+      if (terminalStatus) {
+        terminalStatus.textContent = `Loaded: ${name}`;
+        terminalStatus.style.color = "#10b981";
+      }
+    } catch (e) {
+      console.error("Failed to parse example", e);
+    }
+  };
+}
 
-// Crawl Modal Logic
-crawlBtn.onclick = () => {
-  crawlModal.style.display = "block";
-  loadExamples();
-  loadProjectConfig();
-  checkCrawlStatus();
-};
-closeCrawlBtn.onclick = () => crawlModal.style.display = "none";
+// Close modal on outside click
 window.onclick = (e) => {
   if (e.target == modal) modal.style.display = "none";
-  if (e.target == crawlModal) crawlModal.style.display = "none";
 };
 
 function updateCrawlButton(isRunning) {
@@ -405,6 +521,9 @@ async function checkCrawlStatus() {
             terminalStatus.textContent = "Completed";
             terminalStatus.style.color = "#10b981";
             updateCrawlButton(false);
+            // Refresh projects after crawl completes
+            loadProjects();
+            fetchStats();
             return;
           }
           terminalLogs.textContent += event.data + "\n";
@@ -416,6 +535,8 @@ async function checkCrawlStatus() {
           if (terminalStatus.textContent === "Running...") {
             terminalStatus.textContent = "Completed";
             terminalStatus.style.color = "#10b981";
+            loadProjects();
+            fetchStats();
           }
           updateCrawlButton(false);
         };
@@ -490,6 +611,15 @@ crawlActionBtn.onclick = async () => {
         terminalStatus.textContent = "Completed";
         terminalStatus.style.color = "#10b981";
         updateCrawlButton(false);
+        // Refresh projects and stats after successful crawl
+        loadProjects().then(() => {
+          // Select the newly created project if name matches currentConfig
+          if (currentConfig.name) {
+            activeProjectName = currentConfig.name;
+            selectProject(currentConfig.name);
+          }
+        });
+        fetchStats();
         return;
       }
       terminalLogs.textContent += event.data + "\n";
@@ -502,6 +632,9 @@ crawlActionBtn.onclick = async () => {
       if (terminalStatus.textContent === "Running...") {
         terminalStatus.textContent = "Completed";
         terminalStatus.style.color = "#10b981";
+        // Also refresh on error close (might be normal completion)
+        loadProjects();
+        fetchStats();
       }
       updateCrawlButton(false);
     };
@@ -758,9 +891,19 @@ function addMessage(role, text) {
 }
 
 async function fetchStats() {
+  showLoading();
   try {
     const res = await fetch("/stats");
     const data = await res.json();
+    
+    // Update deploy mode badge
+    if (data.deploy_mode) {
+      updateDeployModeBadge(data.deploy_mode);
+    }
+    
+    // Update hasData state
+    hasData = data.has_data === true;
+    
     if (data.documents) {
       statsEl.textContent = `${data.documents} documents indexed`;
     } else {
@@ -769,6 +912,8 @@ async function fetchStats() {
   } catch (e) {
     console.error("Failed to fetch stats", e);
     statsEl.textContent = "Error loading stats";
+  } finally {
+    hideLoading();
   }
 }
 
@@ -778,10 +923,10 @@ async function loadProjects() {
     const modeRes = await fetch("/config/mode");
     const modeData = await modeRes.json();
 
-    // If NYRAG_CONFIG is set, hide the project selector
-    const formGroup = projectSelector.parentElement;
+    // If NYRAG_CONFIG is set, hide the create new button and use the config
     if (!modeData.allow_project_selection) {
-      formGroup.style.display = 'none';
+      if (createNewBtn) createNewBtn.style.display = 'none';
+      if (configUpload) configUpload.parentElement.style.display = 'none';
       // Update active project indicator
       const indicator = document.getElementById("active-project-indicator");
       if (indicator) {
@@ -790,25 +935,25 @@ async function loadProjects() {
       return;
     }
 
-    // Normal project-based mode
-    formGroup.style.display = 'block';
+    // Check if any projects exist - if not, default to feed mode
     const res = await fetch("/projects");
     const projects = await res.json();
+    
+    if (projects.length === 0) {
+      // No projects - default to feed mode (create new project)
+      setMode("feed");
+      return;
+    }
 
-    // Maintain default option
-    projectSelector.innerHTML = '<option value="">-- Select Project --</option>';
-
-    projects.forEach(p => {
-      const opt = document.createElement("option");
-      opt.value = p;
-      opt.textContent = p;
-      projectSelector.appendChild(opt);
-    });
-
-    // Auto-select if only one project
-    if (projects.length === 1) {
-      projectSelector.value = projects[0];
-      await selectProject(projects[0]);
+    // Update settings modal project selector
+    if (projectSelector) {
+      projectSelector.innerHTML = '<option value="">-- Select Project --</option>';
+      projects.forEach(p => {
+        const opt = document.createElement("option");
+        opt.value = p;
+        opt.textContent = p;
+        projectSelector.appendChild(opt);
+      });
     }
   } catch (e) {
     console.error("Failed to load projects", e);
@@ -827,18 +972,102 @@ async function selectProject(projectName) {
 
     const data = await res.json();
     if (data.status === "success") {
+      activeProjectName = projectName;
       // Update active project indicator
       const indicator = document.getElementById("active-project-indicator");
       if (indicator) {
         indicator.textContent = `Project: ${projectName}`;
       }
-      // Refresh stats
-      fetchStats();
+      // Sync settings modal selector
+      if (projectSelector) projectSelector.value = projectName;
+      // Refresh stats and then switch to chat mode (which will show error if no data)
+      await fetchStats();
       chatHistory = [];
+      // Switch to chat mode - it will show no-data error if needed
+      setMode("chat");
     }
   } catch (e) {
     console.error("Failed to select project", e);
   }
+}
+
+// Create New Project button handler
+if (createNewBtn) {
+  createNewBtn.onclick = async () => {
+    activeProjectName = null;
+    // Update active project indicator
+    const indicator = document.getElementById("active-project-indicator");
+    if (indicator) {
+      indicator.textContent = "New Project";
+    }
+    setMode("feed");
+    // Reset to a blank/template config
+    currentConfig = JSON.parse(JSON.stringify(FALLBACK_CONFIG));
+    await loadSchema(currentConfig.mode || "web");
+    renderConfigEditor();
+  };
+}
+
+// Config Upload handler
+if (configUpload) {
+  configUpload.onchange = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    showLoading();
+    try {
+      const content = await file.text();
+      const parsed = jsyaml.load(content);
+      
+      if (!parsed || !parsed.name) {
+        alert("Invalid config file: missing 'name' field");
+        return;
+      }
+      
+      // Normalize project name to match backend convention (nyrag + cleaned name)
+      const rawName = parsed.name;
+      const cleanName = rawName.replace(/-/g, "").replace(/_/g, "").toLowerCase();
+      const normalizedName = `nyrag${cleanName}`;
+      
+      // Save the uploaded config
+      await fetch("/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: content })
+      });
+      
+      // Select the project with normalized name
+      activeProjectName = normalizedName;
+      currentConfig = deepMerge(JSON.parse(JSON.stringify(FALLBACK_CONFIG)), parsed);
+      
+      // Update active project indicator
+      const indicator = document.getElementById("active-project-indicator");
+      if (indicator) {
+        indicator.textContent = `Project: ${normalizedName}`;
+      }
+      
+      // Try to select the project on the backend
+      await fetch("/projects/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_name: normalizedName })
+      });
+      
+      // Refresh stats and switch to chat mode
+      await fetchStats();
+      chatHistory = [];
+      setMode("chat");
+      
+    } catch (e) {
+      console.error("Failed to parse config file", e);
+      alert("Failed to parse config file: " + e.message);
+    } finally {
+      hideLoading();
+    }
+    
+    // Reset file input
+    event.target.value = "";
+  };
 }
 
 projectSelector.onchange = async () => {
@@ -864,11 +1093,7 @@ async function loadUserSettings() {
     if (settings.active_project) {
       // Will be set after projects are loaded
       setTimeout(() => {
-        const projectSelector = document.getElementById("project-selector");
-        if (projectSelector && projectSelector.querySelector(`option[value="${settings.active_project}"]`)) {
-          projectSelector.value = settings.active_project;
-          selectProject(settings.active_project);
-        }
+        selectProject(settings.active_project);
       }, 500);
     }
   } catch (e) {
@@ -880,7 +1105,7 @@ async function loadUserSettings() {
 async function saveUserSettings() {
   try {
     const settings = {
-      active_project: document.getElementById("project-selector").value || null,
+      active_project: activeProjectName || null,
       hits: parseInt(document.getElementById("hits").value) || 5,
       k: parseInt(document.getElementById("k").value) || 3,
       query_k: parseInt(document.getElementById("query_k").value) || 3,
@@ -910,7 +1135,38 @@ inputEl.addEventListener('input', function () {
   }
 });
 
-// Initial calls
-loadProjects();
-loadUserSettings();
-fetchStats();
+// Initialize UI state
+async function initializeApp() {
+  // Always start in feed mode (create new project)
+  // Users must upload a config to chat with an existing project
+  activeProjectName = null;
+  
+  // Fetch deploy mode and stats first
+  try {
+    const res = await fetch("/stats");
+    const data = await res.json();
+    if (data.deploy_mode) {
+      updateDeployModeBadge(data.deploy_mode);
+    }
+  } catch (e) {
+    console.error("Failed to fetch initial stats", e);
+  }
+  
+  // Set indicator to "New Project"
+  const indicator = document.getElementById("active-project-indicator");
+  if (indicator) {
+    indicator.textContent = "New Project";
+  }
+  
+  // Load the default/template config for feed mode
+  await loadSchema("web");
+  currentConfig = JSON.parse(JSON.stringify(FALLBACK_CONFIG));
+  renderConfigEditor();
+  await loadExamples();
+  
+  // Set to feed mode AFTER everything is loaded
+  setMode("feed");
+}
+
+// Initial call
+initializeApp();
