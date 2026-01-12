@@ -165,7 +165,9 @@ def _select_inline_target(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _select_target(config: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+def _select_target(
+    config: Dict[str, Any],
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     targets = config.get("targets")
     if isinstance(targets, dict):
         target_name = _get_current_target_name(config)
@@ -188,7 +190,9 @@ def _pick_str(mapping: Optional[Dict[str, Any]], *keys: str) -> Optional[str]:
     return None
 
 
-def _parse_application_id(raw: Optional[str]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def _parse_application_id(
+    raw: Optional[str],
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     if not raw:
         return None, None, None
     for sep in (".", ":", "/"):
@@ -236,7 +240,14 @@ def get_vespa_cli_cloud_config() -> Dict[str, Optional[str]]:
     )
 
     tenant = _pick_str(target, "tenant", "tenantName")
-    application = _pick_str(target, "application", "app", "applicationName", "application_id", "applicationId")
+    application = _pick_str(
+        target,
+        "application",
+        "app",
+        "applicationName",
+        "application_id",
+        "applicationId",
+    )
     instance = _pick_str(target, "instance", "instanceName")
 
     app_block = target.get("application")
@@ -267,16 +278,48 @@ def get_vespa_cli_cloud_config() -> Dict[str, Optional[str]]:
     api_key_path = api_key_path or classified_path
     api_key = classified_key or api_key
 
-    cert = _pick_str(auth, "cert", "certificate", "client_cert", "clientCert", "dataPlaneCert", "data_plane_cert")
-    key = _pick_str(auth, "key", "private_key", "client_key", "clientKey", "dataPlaneKey", "data_plane_key")
+    cert = _pick_str(
+        auth,
+        "cert",
+        "certificate",
+        "client_cert",
+        "clientCert",
+        "dataPlaneCert",
+        "data_plane_cert",
+    )
+    key = _pick_str(
+        auth,
+        "key",
+        "private_key",
+        "client_key",
+        "clientKey",
+        "dataPlaneKey",
+        "data_plane_key",
+    )
     if not cert:
         cert = _pick_str(
-            target, "cert", "certificate", "client_cert", "clientCert", "dataPlaneCert", "data_plane_cert"
+            target,
+            "cert",
+            "certificate",
+            "client_cert",
+            "clientCert",
+            "dataPlaneCert",
+            "data_plane_cert",
         )
     if not key:
-        key = _pick_str(target, "key", "private_key", "client_key", "clientKey", "dataPlaneKey", "data_plane_key")
+        key = _pick_str(
+            target,
+            "key",
+            "private_key",
+            "client_key",
+            "clientKey",
+            "dataPlaneKey",
+            "data_plane_key",
+        )
 
     ca_cert = _pick_str(tls, "caCert", "ca_cert", "ca", "ca_path", "caPath")
+    if not ca_cert:
+        ca_cert = _pick_str(auth, "caCert", "ca_cert", "ca", "ca_path", "caPath")
     if not ca_cert:
         ca_cert = _pick_str(target, "caCert", "ca_cert", "ca", "ca_path", "caPath")
 
