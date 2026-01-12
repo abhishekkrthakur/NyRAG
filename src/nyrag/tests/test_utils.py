@@ -1,5 +1,6 @@
 """Tests for the utils module."""
 
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -21,6 +22,15 @@ from nyrag.utils import (
     is_cloud_mode,
     resolve_vespa_cloud_mtls_paths,
 )
+from nyrag.vespa_cli import clear_vespa_cli_cache
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cli_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    clear_vespa_cli_cache()
+    yield
+    clear_vespa_cli_cache()
 
 
 class TestIsCloudMode:
@@ -96,6 +106,124 @@ class TestResolveVespaCloudMtlsPaths:
         expected_base = Path.home() / ".vespa" / "devrel-public.my-project.default"
         assert cert_path == expected_base / "data-plane-public-cert.pem"
         assert key_path == expected_base / "data-plane-private-key.pem"
+
+    def test_mtls_paths_with_target(self):
+        """Test that mTLS paths use tenant/app/instance when provided."""
+        cert_path, key_path = resolve_vespa_cloud_mtls_paths(
+            "ignored-project",
+            tenant="tenant",
+            application="app",
+            instance="instance",
+        )
+        expected_base = Path.home() / ".vespa" / "tenant.app.instance"
+        assert cert_path == expected_base / "data-plane-public-cert.pem"
+        assert key_path == expected_base / "data-plane-private-key.pem"
+
+
+class TestVespaCliFallback:
+    """Tests for Vespa CLI fallback behavior."""
+
+    def _write_cli_config(self, data: dict) -> Path:
+        config_path = Path.home() / ".vespa" / "cli" / "config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(data))
+        clear_vespa_cli_cache()
+        return config_path
+
+    def test_cloud_settings_from_cli(self):
+        """Test that cloud settings are loaded from Vespa CLI config."""
+        self._write_cli_config(
+            {
+                "current_target": "tenant.app.instance",
+                "targets": {
+                    "tenant.app.instance": {
+                        "type": "cloud",
+                        "endpoint": "https://app.tenant.instance.z.vespa-app.cloud:8443",
+                        "tenant": "tenant",
+                        "application": "app",
+                        "instance": "instance",
+                        "auth": {
+                            "apiKeyPath": "/path/to/api-key.pem",
+                            "cert": "/path/to/cert.pem",
+                            "key": "/path/to/key.pem",
+                            "caCert": "/path/to/ca.pem",
+                        },
+                    }
+                },
+            }
+        )
+
+        deploy_config = DeployConfig(deploy_mode="cloud")
+        assert deploy_config.get_cloud_tenant() == "tenant"
+        assert deploy_config.get_cloud_application() == "app"
+        assert deploy_config.get_cloud_instance() == "instance"
+        assert deploy_config.get_cloud_api_key_path() == "/path/to/api-key.pem"
+        assert deploy_config.get_tls_client_cert() == "/path/to/cert.pem"
+        assert deploy_config.get_tls_client_key() == "/path/to/key.pem"
+        assert deploy_config.get_tls_ca_cert() == "/path/to/ca.pem"
+
+        config = Config(name="test", mode="docs", start_loc="/test", deploy_mode="cloud")
+        assert config.get_vespa_url() == "https://app.tenant.instance.z.vespa-app.cloud"
+        assert config.get_vespa_port() == 8443
+
+    def test_env_overrides_cli(self):
+        """Test that env vars override Vespa CLI config."""
+        self._write_cli_config(
+            {
+                "current_target": "tenant.app.instance",
+                "targets": {
+                    "tenant.app.instance": {
+                        "type": "cloud",
+                        "tenant": "tenant",
+                        "application": "app",
+                        "instance": "instance",
+                    }
+                },
+            }
+        )
+
+        with patch.dict(os.environ, {"VESPA_CLOUD_TENANT": "env-tenant"}):
+            deploy_config = DeployConfig(deploy_mode="cloud")
+            assert deploy_config.get_cloud_tenant() == "env-tenant"
+
+    def test_cloud_settings_from_config(self):
+        """Test that config values are used when env vars are missing."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = Config(
+                name="test",
+                mode="docs",
+                start_loc="/test",
+                deploy_mode="cloud",
+                cloud_tenant="tenant",
+            )
+            deploy_config = config.get_deploy_config()
+            assert deploy_config.get_cloud_tenant() == "tenant"
+            assert deploy_config.get_cloud_application() == config.get_app_package_name()
+            assert deploy_config.get_cloud_instance() == "default"
+            assert (
+                config.get_vespa_url() == f"https://{config.get_app_package_name()}.tenant.default.z.vespa-app.cloud"
+            )
+            assert config.get_vespa_port() == DEFAULT_VESPA_CLOUD_PORT
+
+    def test_team_api_key_env(self):
+        """Test that VESPA_TEAM_API_KEY is accepted as an API key."""
+        with patch.dict(os.environ, {"VESPA_TEAM_API_KEY": "team-key"}, clear=True):
+            deploy_config = DeployConfig(deploy_mode="cloud")
+            assert deploy_config.get_cloud_api_key() == "team-key"
+
+    def test_config_endpoint_override(self):
+        """Test that config vespa_url/vespa_port override defaults."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = Config(
+                name="test",
+                mode="docs",
+                start_loc="/test",
+                deploy_mode="cloud",
+                vespa_url="https://example.vespa-app.cloud",
+                vespa_port=8443,
+            )
+            assert config.get_vespa_url() == "https://example.vespa-app.cloud"
+            assert config.get_vespa_port() == 8443
 
 
 class TestGetTlsConfigFromDeploy:

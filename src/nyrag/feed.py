@@ -9,7 +9,7 @@ from nyrag.defaults import DEFAULT_EMBEDDING_MODEL, DEFAULT_VESPA_LOCAL_PORT, DE
 from nyrag.deploy import deploy_app_package
 from nyrag.logger import logger
 from nyrag.schema import VespaSchema
-from nyrag.utils import chunks, get_tls_config_from_deploy, make_vespa_client
+from nyrag.utils import chunks, get_cloud_secret_token, get_tls_config_from_deploy, make_vespa_client
 
 
 class VespaFeeder:
@@ -60,7 +60,8 @@ class VespaFeeder:
             if "401" in msg and "Unauthorized" in msg:
                 logger.error(
                     "Vespa feed returned 401 Unauthorized. "
-                    "For Vespa Cloud, set deploy.tls.client_cert and deploy.tls.client_key (mTLS) in config."
+                    "For Vespa Cloud, set VESPA_CLOUD_SECRET_TOKEN for token auth, "
+                    "or VESPA_CLIENT_CERT/VESPA_CLIENT_KEY for mTLS auth."
                 )
             logger.error(f"Feed request failed for id={prepared['id']}: {e}")
             return False
@@ -82,6 +83,20 @@ class VespaFeeder:
         deploy_config = self.config.get_deploy_config()
         cert_path, key_path, ca_cert, verify = get_tls_config_from_deploy(deploy_config)
 
+        # Get cloud secret token for token-based auth (preferred for cloud)
+        cloud_token = None
+        if deploy_config.is_cloud_mode():
+            cloud_token = get_cloud_secret_token(deploy_config)
+            if cloud_token:
+                logger.info("Using token-based authentication for Vespa Cloud")
+            elif cert_path and key_path:
+                logger.info("Using mTLS authentication for Vespa Cloud")
+            else:
+                logger.warning(
+                    "No authentication credentials found for Vespa Cloud. "
+                    "Set VESPA_CLOUD_SECRET_TOKEN or configure mTLS certificates."
+                )
+
         if redeploy:
             logger.info("Redeploying Vespa application before feeding")
             vespa_schema = VespaSchema(
@@ -93,7 +108,15 @@ class VespaFeeder:
             deploy_app_package(None, app_package=app_package, deploy_config=deploy_config)
 
         logger.info(f"Connecting to Vespa at {vespa_url}:{vespa_port}")
-        return make_vespa_client(vespa_url, vespa_port, cert_path, key_path, ca_cert, verify)
+        return make_vespa_client(
+            vespa_url,
+            vespa_port,
+            cert_path,
+            key_path,
+            ca_cert,
+            verify,
+            vespa_cloud_secret_token=cloud_token,
+        )
 
     def _prepare_record(self, record: Dict[str, str]) -> Dict[str, Dict[str, object]]:
         content = record.get("content", "").strip()

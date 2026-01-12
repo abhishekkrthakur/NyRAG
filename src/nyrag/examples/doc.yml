@@ -2,6 +2,7 @@ name: docrag
 mode: docs
 start_loc: /docs/
 deploy_mode: local  # "local" for Docker or "cloud" for Vespa Cloud
+cloud_tenant: your-tenant  # required for cloud mode (env/CLI still override)
 exclude:
   - "*.html"
 

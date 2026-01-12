@@ -1,11 +1,33 @@
 """Tests for the config module."""
 
+import os
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from nyrag.config import Config, CrawlParams, DocParams, RAGParams
+from nyrag.config import Config, CrawlParams, DeployConfig, DocParams, LLMConfig, RAGParams
+from nyrag.defaults import (
+    DEFAULT_DEPLOY_MODE,
+    DEFAULT_LLM_BASE_URL,
+    DEFAULT_LLM_MODEL,
+    DEFAULT_VESPA_CLOUD_INSTANCE,
+    DEFAULT_VESPA_CLOUD_PORT,
+    DEFAULT_VESPA_LOCAL_PORT,
+    DEFAULT_VESPA_TLS_VERIFY,
+    DEFAULT_VESPA_URL,
+)
+from nyrag.vespa_cli import clear_vespa_cli_cache
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cli_home(tmp_path, monkeypatch):
+    """Isolate tests from the user's home directory."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    clear_vespa_cli_cache()
+    yield
+    clear_vespa_cli_cache()
 
 
 class TestCrawlParams:
@@ -187,3 +209,232 @@ crawl_params:
         assert schema_params["embedding_dim"] == 384
         assert schema_params["chunk_size"] == 1024
         assert schema_params["distance_metric"] == "angular"
+
+
+class TestLLMConfig:
+    """Tests for LLMConfig model."""
+
+    def test_default_values(self):
+        """Test default LLM configuration."""
+        config = LLMConfig()
+        assert config.base_url == DEFAULT_LLM_BASE_URL
+        assert config.model == DEFAULT_LLM_MODEL
+        assert config.api_key is None
+
+    def test_custom_values(self):
+        """Test custom LLM configuration."""
+        config = LLMConfig(
+            base_url="https://api.openai.com/v1",
+            model="gpt-4",
+            api_key="test-key",
+        )
+        assert config.base_url == "https://api.openai.com/v1"
+        assert config.model == "gpt-4"
+        assert config.api_key == "test-key"
+
+
+class TestDeployConfig:
+    """Tests for DeployConfig model."""
+
+    def test_default_values(self):
+        """Test default deploy configuration."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = DeployConfig()
+            assert config.deploy_mode == DEFAULT_DEPLOY_MODE
+            assert config.cloud_tenant is None
+            assert config.cloud_application is None
+            assert config.cloud_instance is None
+
+    def test_is_cloud_mode(self):
+        """Test is_cloud_mode method."""
+        cloud_config = DeployConfig(deploy_mode="cloud")
+        local_config = DeployConfig(deploy_mode="local")
+        assert cloud_config.is_cloud_mode() is True
+        assert local_config.is_cloud_mode() is False
+
+    def test_is_local_mode(self):
+        """Test is_local_mode method."""
+        cloud_config = DeployConfig(deploy_mode="cloud")
+        local_config = DeployConfig(deploy_mode="local")
+        assert cloud_config.is_local_mode() is False
+        assert local_config.is_local_mode() is True
+
+    def test_get_vespa_url_default(self):
+        """Test default Vespa URL for local mode."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = DeployConfig(deploy_mode="local")
+            assert config.get_vespa_url() == DEFAULT_VESPA_URL
+
+    def test_get_vespa_url_from_env(self):
+        """Test Vespa URL from environment variable."""
+        with patch.dict(os.environ, {"VESPA_URL": "http://custom-vespa:8080"}):
+            config = DeployConfig(deploy_mode="local")
+            assert config.get_vespa_url() == "http://custom-vespa:8080"
+
+    def test_get_vespa_port_local_default(self):
+        """Test default Vespa port for local mode."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = DeployConfig(deploy_mode="local")
+            assert config.get_vespa_port() == DEFAULT_VESPA_LOCAL_PORT
+
+    def test_get_vespa_port_cloud_default(self):
+        """Test default Vespa port for cloud mode."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = DeployConfig(deploy_mode="cloud")
+            assert config.get_vespa_port() == DEFAULT_VESPA_CLOUD_PORT
+
+    def test_get_vespa_port_from_env(self):
+        """Test Vespa port from environment variable."""
+        with patch.dict(os.environ, {"VESPA_PORT": "9090"}):
+            config = DeployConfig(deploy_mode="local")
+            assert config.get_vespa_port() == 9090
+
+    def test_get_cloud_tenant_from_config(self):
+        """Test cloud tenant from config."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = DeployConfig(deploy_mode="cloud", cloud_tenant="my-tenant")
+            assert config.get_cloud_tenant() == "my-tenant"
+
+    def test_get_cloud_application_from_config(self):
+        """Test cloud application from config."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = DeployConfig(deploy_mode="cloud", cloud_application="my-app")
+            assert config.get_cloud_application() == "my-app"
+
+    def test_get_cloud_instance_default(self):
+        """Test default cloud instance."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = DeployConfig(deploy_mode="cloud")
+            assert config.get_cloud_instance() == DEFAULT_VESPA_CLOUD_INSTANCE
+
+    def test_get_cloud_instance_from_config(self):
+        """Test cloud instance from config."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = DeployConfig(deploy_mode="cloud", cloud_instance="prod")
+            assert config.get_cloud_instance() == "prod"
+
+    def test_get_tls_verify_default(self):
+        """Test default TLS verify setting."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = DeployConfig()
+            assert config.get_tls_verify() == DEFAULT_VESPA_TLS_VERIFY
+
+    def test_get_tls_verify_from_env(self):
+        """Test TLS verify from environment variable."""
+        with patch.dict(os.environ, {"VESPA_TLS_VERIFY": "0"}):
+            config = DeployConfig()
+            assert config.get_tls_verify() is False
+
+        with patch.dict(os.environ, {"VESPA_TLS_VERIFY": "true"}):
+            config = DeployConfig()
+            assert config.get_tls_verify() is True
+
+        with patch.dict(os.environ, {"VESPA_TLS_VERIFY": "yes"}):
+            config = DeployConfig()
+            assert config.get_tls_verify() is True
+
+    def test_get_cloud_api_key_from_env(self):
+        """Test cloud API key from environment variable."""
+        with patch.dict(os.environ, {"VESPA_CLOUD_API_KEY": "my-api-key"}):
+            config = DeployConfig(deploy_mode="cloud")
+            assert config.get_cloud_api_key() == "my-api-key"
+
+    def test_get_tls_client_cert_local_mode(self):
+        """Test that TLS client cert returns None for local mode without CLI."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = DeployConfig(deploy_mode="local")
+            assert config.get_tls_client_cert() is None
+
+    def test_get_tls_client_key_local_mode(self):
+        """Test that TLS client key returns None for local mode without CLI."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = DeployConfig(deploy_mode="local")
+            assert config.get_tls_client_key() is None
+
+    def test_get_tls_ca_cert_local_mode(self):
+        """Test that TLS CA cert returns None for local mode without CLI."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = DeployConfig(deploy_mode="local")
+            assert config.get_tls_ca_cert() is None
+
+    def test_get_cloud_secret_token_from_env(self):
+        """Test cloud secret token from environment variable."""
+        with patch.dict(os.environ, {"VESPA_CLOUD_SECRET_TOKEN": "my-token"}):
+            config = DeployConfig(deploy_mode="cloud")
+            assert config.get_cloud_secret_token() == "my-token"
+
+    def test_get_configserver_url_default(self):
+        """Test default config server URL."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = DeployConfig()
+            # Should return default
+            url = config.get_configserver_url()
+            assert "localhost" in url or "19071" in url
+
+    def test_get_configserver_url_from_env(self):
+        """Test config server URL from environment variable."""
+        with patch.dict(os.environ, {"VESPA_CONFIGSERVER_URL": "http://vespa:19071"}):
+            config = DeployConfig()
+            assert config.get_configserver_url() == "http://vespa:19071"
+
+
+class TestConfigMethods:
+    """Tests for Config class methods."""
+
+    def test_is_web_mode(self):
+        """Test is_web_mode method."""
+        web_config = Config(name="test", mode="web", start_loc="https://example.com")
+        docs_config = Config(name="test", mode="docs", start_loc="/path")
+        assert web_config.is_web_mode() is True
+        assert docs_config.is_web_mode() is False
+
+    def test_is_docs_mode(self):
+        """Test is_docs_mode method."""
+        web_config = Config(name="test", mode="web", start_loc="https://example.com")
+        docs_config = Config(name="test", mode="docs", start_loc="/path")
+        assert web_config.is_docs_mode() is False
+        assert docs_config.is_docs_mode() is True
+
+    def test_is_cloud_deploy_mode(self):
+        """Test is_cloud_mode method for deploy mode check."""
+        with patch.dict(os.environ, {}, clear=True):
+            cloud_config = Config(name="test", mode="docs", start_loc="/path", deploy_mode="cloud")
+            local_config = Config(name="test", mode="docs", start_loc="/path", deploy_mode="local")
+            assert cloud_config.is_cloud_mode() is True
+            assert local_config.is_cloud_mode() is False
+
+    def test_is_local_deploy_mode(self):
+        """Test is_local_deploy_mode method."""
+        with patch.dict(os.environ, {}, clear=True):
+            cloud_config = Config(name="test", mode="docs", start_loc="/path", deploy_mode="cloud")
+            local_config = Config(name="test", mode="docs", start_loc="/path", deploy_mode="local")
+            assert cloud_config.is_local_deploy_mode() is False
+            assert local_config.is_local_deploy_mode() is True
+
+    def test_get_deploy_config(self):
+        """Test get_deploy_config method."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = Config(
+                name="test",
+                mode="docs",
+                start_loc="/path",
+                deploy_mode="cloud",
+                cloud_tenant="my-tenant",
+            )
+            deploy_config = config.get_deploy_config()
+            assert isinstance(deploy_config, DeployConfig)
+            assert deploy_config.deploy_mode == "cloud"
+            assert deploy_config.cloud_tenant == "my-tenant"
+
+    def test_get_output_path(self):
+        """Test get_output_path method."""
+        config = Config(name="my-app", mode="docs", start_loc="/path")
+        output_path = config.get_output_path()
+        assert isinstance(output_path, Path)
+        assert "my-app" in str(output_path) or "nyrag" in str(output_path)
+
+    def test_get_app_path(self):
+        """Test get_app_path method."""
+        config = Config(name="my-app", mode="docs", start_loc="/path")
+        app_path = config.get_app_path()
+        assert isinstance(app_path, Path)

@@ -52,139 +52,75 @@ cd nyrag
 pip install -e .
 ```
 
-## Quick Start
+## Usage
 
-nyrag operates in two deployment modes (**Local** or **Cloud**) and two data modes (**Web** or **Docs**):
+NyRAG is designed to be used primarily through its web UI, which manages the entire lifecycle from data processing to chat.
 
-| Deployment | Data Mode | Description |
-|------------|-----------|-------------|
-| Local | Web | Crawl websites → Local Vespa Docker |
-| Local | Docs | Process documents → Local Vespa Docker |
-| Cloud | Web | Crawl websites → Vespa Cloud |
-| Cloud | Docs | Process documents → Vespa Cloud |
+### 1. Start the UI
 
----
-
-## Local Mode
-
-Runs Vespa in a local Docker container. Great for development and testing.
-
-### Web Crawling (Local)
-
+**Local Mode** (requires Docker):
 ```bash
-export NYRAG_LOCAL=1
-
-nyrag process --config configs/example.yml
+nyrag ui
 ```
 
-Example config for web crawling:
+**Cloud Mode** (requires Vespa Cloud account):
+```bash
+nyrag ui --cloud
+```
+
+Open http://localhost:8000 in your browser.
+
+### 2. Configure & Process
+
+In the UI, you can create a new configuration for your data source.
+
+**Example Web Crawl Config:**
 
 ```yaml
 name: mywebsite
 mode: web
 start_loc: https://example.com/
-exclude:
-  - https://example.com/admin/*
-  - https://example.com/private/*
-
 crawl_params:
   respect_robots_txt: true
-  follow_subdomains: true
-  user_agent_type: chrome
-
 rag_params:
   embedding_model: sentence-transformers/all-MiniLM-L6-v2
-  chunk_size: 1024
-  chunk_overlap: 50
+  llm_api_key: your-api-key
+  llm_model: openai/gpt-4o
 ```
 
-### Document Processing (Local)
-
-```bash
-export NYRAG_LOCAL=1
-
-nyrag process --config configs/doc_example.yml
-```
-
-Example config for document processing:
+**Example Docs Processing Config:**
 
 ```yaml
 name: mydocs
 mode: docs
 start_loc: /path/to/documents/
-exclude:
-  - "*.csv"
-
 doc_params:
   recursive: true
-  file_extensions:
-    - .pdf
-    - .docx
-    - .txt
-    - .md
-
 rag_params:
   embedding_model: sentence-transformers/all-mpnet-base-v2
-  chunk_size: 512
-  chunk_overlap: 50
+  llm_api_key: your-api-key
+  llm_model: openai/gpt-4o
 ```
 
-### Chat UI (Local)
+### 3. Chat
 
-After crawling/processing is complete:
+Once processing is complete, you can start chatting with your data immediately in the UI. Make sure your configuration includes your LLM API key and model selection.
 
-```bash
-export NYRAG_CONFIG=configs/example.yml
-export LLM_API_KEY=your-api-key
-export LLM_MODEL=openai/gpt-5.1
-
-nyrag ui
-```
-
-Open http://localhost:8000/chat
-
----
-
-## Cloud Mode
-
-Deploys to Vespa Cloud for production use.
-
-### Web Crawling (Cloud)
-
-```bash
-export NYRAG_LOCAL=0
-export VESPA_CLOUD_TENANT=your-tenant
-
-nyrag process --config configs/example.yml
-```
-
-### Document Processing (Cloud)
-
-```bash
-export NYRAG_LOCAL=0
-export VESPA_CLOUD_TENANT=your-tenant
-
-nyrag process --config configs/doc_example.yml
-```
-
-### Chat UI (Cloud)
-
-After crawling/processing is complete:
-
-```bash
-export NYRAG_CONFIG=configs/example.yml
-export VESPA_URL="https://<your-endpoint>.z.vespa-app.cloud"
-export LLM_API_KEY=your-api-key
-export LLM_MODEL=openai/gpt-5.1
-
-nyrag ui
-```
-
-Open http://localhost:8000/chat
-
----
 
 ## Configuration Reference
+
+### Cloud Deploy Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cloud_tenant` | str | `None` | Vespa Cloud tenant (required for cloud mode if no env/CLI target) |
+
+### Connection Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `vespa_url` | str | `None` | Vespa endpoint URL (auto-filled into `conf.yml` after deploy) |
+| `vespa_port` | int | `None` | Vespa endpoint port (auto-filled into `conf.yml` after deploy) |
 
 ### Web Mode Parameters (`crawl_params`)
 
@@ -224,118 +160,26 @@ Open http://localhost:8000/chat
 
 ---
 
-## Environment Variables
 
-### Deployment Mode
+## LLM Provider Support
 
-| Variable | Description |
-|----------|-------------|
-| `NYRAG_LOCAL` | `1` for local Docker, `0` for Vespa Cloud |
+NyRAG works with any OpenAI-compatible API. Just configure the `rag_params` in your UI settings.
 
-### Local Mode
+| Provider | Base URL | Model Example | API Key |
+|----------|----------|---------------|---------|
+| **Ollama** | `http://localhost:11434/v1` | `llama3.2` | `dummy` |
+| **LM Studio** | `http://localhost:1234/v1` | `local-model` | `dummy` |
+| **vLLM** | `http://localhost:8000/v1` | `meta-llama/Llama-3.2-3B-Instruct` | `dummy` |
+| **OpenRouter** | `https://openrouter.ai/api/v1` | `anthropic/claude-3.5-sonnet` | `your-key` |
+| **OpenAI** | `None` (default) | `openai/gpt-4o` | `your-key` |
 
-| Variable | Description |
-|----------|-------------|
-| `NYRAG_VESPA_DOCKER_IMAGE` | Docker image (default: `vespaengine/vespa:latest`) |
+**Example Config:**
 
-### Cloud Mode
-
-| Variable | Description |
-|----------|-------------|
-| `VESPA_CLOUD_TENANT` | Your Vespa Cloud tenant |
-| `VESPA_CLOUD_APPLICATION` | Application name (optional) |
-| `VESPA_CLOUD_INSTANCE` | Instance name (default: `default`) |
-| `VESPA_CLOUD_API_KEY_PATH` | Path to API key file |
-| `VESPA_CLIENT_CERT` | Path to mTLS certificate |
-| `VESPA_CLIENT_KEY` | Path to mTLS private key |
-
-### Chat UI
-
-| Variable | Description |
-|----------|-------------|
-| `NYRAG_CONFIG` | Path to config file |
-| `VESPA_URL` | Vespa endpoint URL (optional for local, required for cloud) |
-| `VESPA_SCHEMA` | Override schema name from config |
-| `EMBEDDING_MODEL` | Override embedding model from config |
-| `LLM_BASE_URL` | LLM API base URL (OpenAI-compatible API) |
-| `LLM_MODEL` | LLM model name |
-| `LLM_API_KEY` | LLM API key |
-
-**Configuration Priority:** Environment variables always take precedence over config file values. When both are set, env vars override the config file.
-
----
-
-## Using Local Models
-
-NyRAG supports running LLMs locally using any OpenAI-compatible server. Here are some popular options:
-
-### Ollama
-
-1. **Install Ollama**: [https://ollama.ai](https://ollama.ai)
-
-2. **Pull a model**:
-   ```bash
-   ollama pull llama3.2
-   ```
-
-3. **Configure NyRAG** (option 1: environment variables):
-   ```bash
-   export LLM_BASE_URL=http://localhost:11434/v1
-   export LLM_MODEL=llama3.2
-   export LLM_API_KEY=dummy  # Any value works
-   ```
-
-4. **Or configure in YAML**:
-   ```yaml
-   rag_params:
-     llm_base_url: http://localhost:11434/v1
-     llm_model: llama3.2
-     llm_api_key: dummy
-   ```
-
-5. **Start the chat UI**:
-   ```bash
-   nyrag ui
-   ```
-
-### LM Studio
-
-1. **Install LM Studio**: [https://lmstudio.ai](https://lmstudio.ai)
-
-2. **Load a model and start the server** (default port: 1234)
-
-3. **Configure NyRAG**:
-   ```bash
-   export LLM_BASE_URL=http://localhost:1234/v1
-   export LLM_MODEL=local-model  # Model name from LM Studio
-   export LLM_API_KEY=dummy
-   ```
-
-### vLLM
-
-1. **Install and run vLLM**:
-   ```bash
-   pip install vllm
-   python -m vllm.entrypoints.openai.api_server \
-     --model meta-llama/Llama-3.2-3B-Instruct \
-     --port 8000
-   ```
-
-2. **Configure NyRAG**:
-   ```bash
-   export LLM_BASE_URL=http://localhost:8000/v1
-   export LLM_MODEL=meta-llama/Llama-3.2-3B-Instruct
-   export LLM_API_KEY=dummy
-   ```
-
-### OpenRouter (Cloud)
-
-For access to 100+ models without local setup:
-
-```bash
-export LLM_BASE_URL=https://openrouter.ai/api/v1
-export LLM_MODEL=anthropic/claude-3.5-sonnet
-export LLM_API_KEY=your-openrouter-key
+```yaml
+rag_params:
+  llm_base_url: http://localhost:11434/v1  # Optional: remove for OpenAI
+  llm_model: llama3.2
+  llm_api_key: dummy
 ```
 
 ---
