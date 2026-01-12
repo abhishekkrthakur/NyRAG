@@ -51,13 +51,13 @@ body {
 
 /* Header */
 .app-header {
-  padding: 16px 24px;
-  /* border-bottom: 1px solid var(--border-color); */
+  height: 64px;
+  padding: 0 24px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  justify-content: center;
-  background: rgba(18, 18, 18, 0.8);
+  justify-content: space-between;
+  background: rgba(18, 18, 18, 0.95);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   z-index: 10;
@@ -65,54 +65,154 @@ body {
   top: 0;
   left: 0;
   right: 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.header-left, .header-right {
+  display: flex;
+  align-items: center;
+}
+
+.header-left {
+  flex: 1;
+}
+
+.logo-group {
+  display: flex;
+  align-items: center;
+  gap: 24px;
 }
 
 .logo {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   color: var(--text-primary);
+  text-decoration: none;
 }
 
 .logo h1 {
   margin: 0;
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.02em;
 }
 
-.hint {
-  margin: 4px 0 0;
-  font-size: 13px;
+/* Badge */
+.deploy-mode-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 99px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--border-color);
   color: var(--text-secondary);
-  opacity: 0.8;
 }
 
-.corpus-stats {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-  opacity: 0.75;
+.deploy-mode-badge.local {
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.deploy-mode-badge.cloud {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.2);
 }
 
 .project-selector-wrapper {
-  margin: 8px 0 0;
+  margin: 0;
+  display: none; /* Controlled by JS */
 }
 
+/* Styling the Select */
 .project-selector {
-  background: var(--panel-bg);
+  background: transparent;
   color: var(--text-primary);
-  border: 1px solid var(--border-color);
+  border: none;
   border-radius: var(--radius-sm);
-  padding: 4px 8px;
-  font-size: 12px;
+  padding: 8px 32px 8px 12px;
+  font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
   outline: none;
-  min-width: 200px;
+  min-width: 160px;
+  transition: background-color 0.2s;
+  
+  /* Custom Arrow */
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 14px;
+}
+
+.project-selector:hover {
+  background-color: var(--panel-bg);
 }
 
 .project-selector:focus {
-  border-color: var(--accent-color);
+  background-color: var(--panel-bg);
+  box-shadow: 0 0 0 1px var(--border-color);
+}
+
+
+/* Header Right Actions */
+.header-actions-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s;
+    padding: 0;
+}
+
+.icon-btn:hover {
+    background: var(--panel-bg);
+    color: var(--text-primary);
+}
+
+.header-divider {
+    width: 1px;
+    height: 24px;
+    background: var(--border-color);
+    margin: 0 16px;
+}
+
+.header-stats {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-right: 16px;
+}
+
+/* Spinner adjustment */
+.header-spinner { 
+    margin-right: 12px;
+}
+.header-spinner .spinner {
+    width: 14px;
+    height: 14px;
+    border-width: 1.5px;
+}
+
+/* Adjustments for hiding old elements if they exist */
+.hint, .corpus-stats:not(.header-stats) {
+    display: none; /* Hide old classes if not used in new structure */
 }
 
 /* Chat Area */

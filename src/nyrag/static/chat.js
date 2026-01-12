@@ -14,6 +14,8 @@ const loadingSpinner = document.getElementById("loading-spinner");
 // Header action buttons
 const configUpload = document.getElementById("config-upload");
 const createNewBtn = document.getElementById("create-new-btn");
+const projectSelector = document.getElementById("project-selector");
+const projectSelectorContainer = document.getElementById("project-selector-container");
 
 // Switch to feed button in no-data message
 const switchToFeedBtn = document.getElementById("switch-to-feed-btn");
@@ -68,6 +70,29 @@ let deployModeSource = null; // "deploy-mode" or "stats"
 let activeProjectName = null; // Currently selected project
 const serverDeployMode = document.body?.dataset?.deployMode;
 
+// Update Input State
+function updateChatInputState() {
+  const isChatMode = currentMode === "chat";
+  const canChat = activeProjectName && hasData;
+  const isDisabled = !isChatMode || !canChat;
+
+  if (inputEl) {
+    inputEl.disabled = isDisabled;
+    if (activeProjectName && !hasData) {
+        inputEl.placeholder = "Feed data to start chatting...";
+    } else if (!activeProjectName) {
+        inputEl.placeholder = "Select a project to chat...";
+    } else {
+        inputEl.placeholder = "Ask a question...";
+    }
+  }
+  if (sendBtn) {
+    sendBtn.disabled = isDisabled;
+    sendBtn.style.opacity = isDisabled ? "0.5" : "1";
+    sendBtn.style.cursor = isDisabled ? "not-allowed" : "pointer";
+  }
+}
+
 // Mode Toggle Logic
 function setMode(mode) {
   currentMode = mode;
@@ -88,14 +113,23 @@ function setMode(mode) {
       if (noDataMessage) {
         noDataMessage.style.display = "flex";
         if (noDataTitle) noDataTitle.textContent = "No data available";
-        if (noDataDescription) noDataDescription.textContent = `Project "${activeProjectName}" has no indexed documents. Feed data to start chatting.`;
+        if (noDataDescription) noDataDescription.textContent = activeProjectName 
+            ? `Project "${activeProjectName}" has no indexed documents. Feed data to start chatting.`
+            : "Select a project to start chatting.";
+            
         if (switchToFeedBtn) {
-          switchToFeedBtn.textContent = "Feed Data to This Project";
-          switchToFeedBtn.style.display = "inline-block";
+          if (activeProjectName) {
+             switchToFeedBtn.textContent = "Feed Data to This Project";
+             switchToFeedBtn.style.display = "inline-block";
+             switchToFeedBtn.onclick = () => setMode("feed");
+          } else {
+             switchToFeedBtn.style.display = "none";
+          }
         }
       }
     }
   } else {
+    // Feed Mode: Clear chat related stuff visually
     if (chatEl) chatEl.style.display = "none";
     if (feedPanel) feedPanel.style.display = "flex";
     if (composerArea) composerArea.style.display = "none";
@@ -109,6 +143,7 @@ function setMode(mode) {
       checkCrawlStatus();
     })();
   }
+  updateChatInputState();
 }
 
 // Switch to feed from no-data message
@@ -931,6 +966,9 @@ async function fetchStats() {
     } else {
       statsEl.textContent = "No documents indexed";
     }
+    
+    updateChatInputState();
+
   } catch (e) {
     console.error("Failed to fetch stats", e);
     statsEl.textContent = "Error loading stats";
@@ -967,15 +1005,26 @@ async function loadProjects() {
       return;
     }
 
-    // Update settings modal project selector
+    // Show selector in header
+    if (projectSelectorContainer) {
+      projectSelectorContainer.style.display = "block";
+    }
+
+    // Update project selector
     if (projectSelector) {
-      projectSelector.innerHTML = '<option value="">-- Select Project --</option>';
+      projectSelector.innerHTML = '<option value="" disabled selected>Select Project</option>';
       projects.forEach(p => {
         const opt = document.createElement("option");
         opt.value = p;
         opt.textContent = p;
         projectSelector.appendChild(opt);
       });
+
+      projectSelector.onchange = (e) => {
+        if (e.target.value) {
+          selectProject(e.target.value);
+        }
+      };
     }
   } catch (e) {
     console.error("Failed to load projects", e);
@@ -1112,12 +1161,8 @@ async function loadUserSettings() {
     if (settings.query_k !== undefined) {
       document.getElementById("query_k").value = settings.query_k;
     }
-    if (settings.active_project) {
-      // Will be set after projects are loaded
-      setTimeout(() => {
-        selectProject(settings.active_project);
-      }, 500);
-    }
+    // Note: We intentionally do NOT auto-select the project here anymore.
+    // if (settings.active_project) { await selectProject(settings.active_project); }
   } catch (e) {
     console.error("Failed to load user settings", e);
   }
@@ -1159,8 +1204,6 @@ inputEl.addEventListener('input', function () {
 
 // Initialize UI state
 async function initializeApp() {
-  // Always start in feed mode (create new project)
-  // Users must upload a config to chat with an existing project
   activeProjectName = null;
 
   // Fetch deploy mode explicitly
@@ -1196,14 +1239,29 @@ async function initializeApp() {
     indicator.textContent = "New Project";
   }
 
-  // Load the default/template config for feed mode
-  await loadSchema("web");
-  currentConfig = JSON.parse(JSON.stringify(FALLBACK_CONFIG));
-  renderConfigEditor();
-  await loadExamples();
+  // Load available projects
+  await loadProjects();
 
-  // Set to feed mode AFTER everything is loaded
-  setMode("feed");
+  // Try to load user settings
+  await loadUserSettings();
+
+  // If no active project loaded (which is default now), start in Chat mode (empty state)
+  if (!activeProjectName) {
+    // Pre-load schemas/configs so Feed mode is ready if they switch
+    await loadSchema("web");
+    currentConfig = JSON.parse(JSON.stringify(FALLBACK_CONFIG));
+    renderConfigEditor();
+    await loadExamples();
+    
+    // Start in chat mode (will show "Select a project..." state)
+    setMode("chat");
+  } else {
+    // This branch is technically unreachable now since we disabled auto-select,
+    // but useful if we ever re-enable it.
+    await selectProject(activeProjectName);
+  }
+  
+  updateChatInputState();
 }
 
 // Initial call
