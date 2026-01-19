@@ -5,6 +5,7 @@ output/
 *.bin
 *.csv
 test/
+blog_post.md
 
 # vscode
 .vscode/
